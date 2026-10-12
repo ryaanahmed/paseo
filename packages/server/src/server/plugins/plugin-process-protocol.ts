@@ -43,6 +43,7 @@ export type PluginProcessRequest =
       appVersion: string;
       pluginDirectory: string;
       settingsDirectory?: string;
+      dataDirectory?: string;
     }
   | {
       type: "provider.catalog_key";
@@ -155,6 +156,7 @@ export const PluginProcessRequestSchema: z.ZodType<PluginProcessRequest> = z.dis
         appVersion: z.string(),
         pluginDirectory: z.string(),
         settingsDirectory: z.string().optional(),
+        dataDirectory: z.string().optional(),
       })
       .strict(),
     z

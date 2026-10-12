@@ -4,7 +4,7 @@ import type { PluginRpcContract } from "../rpc.js";
 import type { PluginCleanup } from "../contracts.js";
 import type { ProviderRegistration } from "./provider.js";
 import type { UsageSourceRegistration } from "./usage.js";
-import type { PluginLifecycleRegistration } from "./lifecycle.js";
+import type { PluginHookContext, PluginLifecycleRegistration } from "./lifecycle.js";
 
 export interface PluginHandlerContext {
   paseo: PaseoApi;
@@ -28,6 +28,10 @@ export interface PluginSettings<Schema extends ZodType> {
 }
 
 export interface PluginServerContext extends PluginLifecycleRegistration {
+  /** Persistent directory for this runtime plugin ID; created by the plugin when needed. */
+  readonly dataDirectory: string;
+  /** Runs once after registration with a connected API. Removal or shutdown aborts the signal. */
+  onReady?(handler: (context: PluginHookContext) => void | Promise<void>): () => void;
   registerSettings<Schema extends ZodType>(
     definition: import("../settings.js").SettingsDefinition<Schema>,
   ): PluginSettings<Schema>;

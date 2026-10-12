@@ -531,6 +531,29 @@ export default function contribute(client: PluginClientContext) {
 
 Cleanup can be async. Release timers, watchers, sockets, and other resources created by the plugin. Paseo also removes registrations, unmounts surfaces, rejects pending RPCs, closes the plugin's daemon session, and stops its subprocess on reload, disable, removal, disconnect, or daemon shutdown.
 
+### Server storage
+
+Use `server.dataDirectory` for persistent plugin-owned state. The host supplies an absolute path
+under its configured Paseo home: `plugin-data/<runtime-plugin-id>`. Two installations of the same
+source with different IDs have different directories. The host does not create the directory;
+create it with private permissions when first writing data. Reload, updates, disable, and removal
+preserve it. Plugins are unsandboxed, so this separates storage ownership, not access privileges.
+
+### Server readiness
+
+Register `server.onReady(({ paseo, signal }) => ...)` during the server contribution to recover
+persisted work without waiting for an RPC or agent event. It runs once per plugin activation,
+after registration and the API connection are ready. Reconnecting the API does not run it again;
+reloading the plugin does. Async callbacks do not delay plugin activation, and callback failures
+are logged without retrying.
+
+The returned remover is idempotent. Removal and plugin shutdown abort `signal`; check it after
+awaiting recovery reads and before initiating new work. Shutdown aborts readiness callbacks before
+entry cleanup. Use entry cleanup to await any recovery work you own and release resources.
+
+`onReady` is optional in the SDK because older hosts do not provide it. A plugin requiring startup
+recovery must check that it exists and fail clearly when it does not.
+
 ## Lifecycle hooks
 
 In `index.server.ts`:

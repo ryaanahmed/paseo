@@ -1,6 +1,6 @@
 import { EventEmitter, once } from "node:events";
 import { resolveDaemonVersion } from "../daemon-version.js";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -135,6 +135,119 @@ export default function contribute(server: PluginServerContext) {
     expect(agents.entries.map((entry) => entry.agent.id)).toContain(
       Reflect.get(created, "agentId"),
     );
+  } finally {
+    await client.close().catch(() => undefined);
+    await daemon.close();
+  }
+}, 60_000);
+
+test("plugin readiness recovers through the API and aborts on removal and reload", async () => {
+  const pluginDirectory = await mkdtemp(path.join(tmpdir(), "paseo-ready-plugin-"));
+  roots.push(pluginDirectory);
+  await writeFile(
+    path.join(pluginDirectory, "paseo-plugin.json"),
+    JSON.stringify({ id: "ready-plugin", requirements: { paseo: ">=0.11.2" } }),
+  );
+  await writeFile(
+    path.join(pluginDirectory, "index.server.ts"),
+    `import { defineRpc } from "@getpaseo/plugin";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { appendFileSync } from "node:fs";
+import { z } from "zod";
+const status = defineRpc({ name: "status", input: z.object({}), output: z.object({ calls: z.number(), count: z.number(), removed: z.boolean() }) });
+export default function contribute(server: PluginServerContext) {
+  if (!server.onReady) throw new Error("Plugin readiness API is required");
+  let calls = 0;
+  let removed = false;
+  let resolveReady: (count: number) => void;
+  const ready = new Promise<number>((resolve) => { resolveReady = resolve; });
+  const removeUnused = server.onReady(() => { calls += 100; });
+  removeUnused();
+  removeUnused();
+  const removeReady = server.onReady(async ({ paseo, signal }) => {
+    calls += 1;
+    signal.addEventListener("abort", () => { removed = true; }, { once: true });
+    const result = await paseo.agents.list({ page: { limit: 1 } });
+    resolveReady(result.entries.length);
+  });
+  server.onReady(({ signal }) => {
+    signal.addEventListener("abort", () => appendFileSync(${JSON.stringify(path.join(pluginDirectory, "stopped"))}, "aborted\\n"), { once: true });
+  });
+  server.handle(status, async () => {
+    const count = await ready;
+    removeReady();
+    return { calls, count, removed };
+  });
+  return () => appendFileSync(${JSON.stringify(path.join(pluginDirectory, "stopped"))}, "cleanup\\n");
+}`,
+  );
+  const daemon = await createTestPaseoDaemon({ agentClients: createTestAgentClients() });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws`, appVersion: "0.4.0" });
+  try {
+    await client.connect();
+    await client.patchDaemonConfig({ pluginsEnabled: true });
+    await client.installDirectoryPlugin(pluginDirectory);
+    await expect(client.invokePluginRpc("ready-plugin", "status", {})).resolves.toEqual({
+      calls: 1,
+      count: 0,
+      removed: true,
+    });
+    await client.reloadPlugin("ready-plugin");
+    expect(await readFile(path.join(pluginDirectory, "stopped"), "utf8")).toBe(
+      "aborted\ncleanup\n",
+    );
+    await expect(client.invokePluginRpc("ready-plugin", "status", {})).resolves.toEqual({
+      calls: 1,
+      count: 0,
+      removed: true,
+    });
+    await client.removePlugin("ready-plugin");
+    expect(await readFile(path.join(pluginDirectory, "stopped"), "utf8")).toBe(
+      "aborted\ncleanup\naborted\ncleanup\n",
+    );
+  } finally {
+    await client.close().catch(() => undefined);
+    await daemon.close();
+  }
+}, 60_000);
+
+test("plugin storage follows the daemon home and isolates installations", async () => {
+  const pluginDirectory = await mkdtemp(path.join(tmpdir(), "paseo-storage-plugin-"));
+  roots.push(pluginDirectory);
+  await writeFile(
+    path.join(pluginDirectory, "paseo-plugin.json"),
+    JSON.stringify({ id: "storage-one", requirements: { paseo: ">=0.11.2" } }),
+  );
+  await writeFile(
+    path.join(pluginDirectory, "index.server.ts"),
+    `
+import { defineRpc } from "@getpaseo/plugin";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { z } from "zod";
+const storage = defineRpc({ name: "storage", input: z.object({}), output: z.string() });
+export default function contribute(server: PluginServerContext) {
+  server.handle(storage, () => server.dataDirectory);
+  return () => {};
+}`,
+  );
+  const daemon = await createTestPaseoDaemon({ agentClients: createTestAgentClients() });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws`, appVersion: "0.4.0" });
+  try {
+    await client.connect();
+    await client.patchDaemonConfig({ pluginsEnabled: true });
+    await client.installDirectoryPlugin(pluginDirectory);
+    await client.installDirectoryPlugin(pluginDirectory, "storage-two");
+    const first = path.join(daemon.paseoHome, "plugin-data", "storage-one");
+    const second = path.join(daemon.paseoHome, "plugin-data", "storage-two");
+    await expect(client.invokePluginRpc("storage-one", "storage", {})).resolves.toBe(first);
+    await expect(client.invokePluginRpc("storage-two", "storage", {})).resolves.toBe(second);
+    await expect(stat(first)).rejects.toMatchObject({ code: "ENOENT" });
+    await mkdir(first, { recursive: true, mode: 0o700 });
+    await writeFile(path.join(first, "state.json"), "persistent", { mode: 0o600 });
+    await client.reloadPlugin("storage-one");
+    await client.removePlugin("storage-one");
+    expect(await readFile(path.join(first, "state.json"), "utf8")).toBe("persistent");
+    await expect(stat(second)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     await client.close().catch(() => undefined);
     await daemon.close();

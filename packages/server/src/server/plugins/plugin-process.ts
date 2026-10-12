@@ -7,7 +7,11 @@ import {
 } from "./plugin-process-protocol.js";
 import type { UsageSourceRegistration } from "@getpaseo/plugin/server/usage";
 import type { SettingsDefinition, PluginRpcContract } from "@getpaseo/plugin";
-import type { PluginHandlerContext, PluginServerContribution } from "@getpaseo/plugin/server";
+import type {
+  PluginHandlerContext,
+  PluginHookContext,
+  PluginServerContribution,
+} from "@getpaseo/plugin/server";
 import { fileURLToPath } from "node:url";
 import type { ZodType } from "zod";
 import {
@@ -62,6 +66,23 @@ export function createPluginWorker(options: {
   const hooks = new PluginHookHandlers(() => {
     send({ type: "hooks.changed", hooks: hooks.catalog() });
   });
+  const readyHandlers = new Map<
+    AbortController,
+    (context: PluginHookContext) => void | Promise<void>
+  >();
+  let registrationComplete = false;
+  function onReady(handler: (context: PluginHookContext) => void | Promise<void>): () => void {
+    if (registrationComplete || stopping) {
+      throw new Error("Register readiness handlers during the plugin contribution");
+    }
+    const controller = new AbortController();
+    readyHandlers.set(controller, handler);
+    return () => {
+      controller.abort();
+      readyHandlers.delete(controller);
+    };
+  }
+
   const handlers = new Map<string, RegisteredRpc>();
   const providers = new Map<string, ProviderRegistration>();
   const usageSources = new Map<string, UsageSourceRegistration>();
@@ -280,11 +301,16 @@ export function createPluginWorker(options: {
         )
       : null;
     const contributedCleanup = contribute({
+      get dataDirectory() {
+        if (!message.dataDirectory) throw new Error("Plugin data storage is unavailable");
+        return message.dataDirectory;
+      },
       handle: (contract, handler) =>
         register(contract, (input, context) => handler(contract.input.parse(input), context)),
       registerProvider,
       registerUsageSource,
       registerSettings,
+      onReady,
       on: hooks.on,
       before: hooks.before,
     });
@@ -292,6 +318,7 @@ export function createPluginWorker(options: {
       throw new Error("Plugin contribution must return a cleanup function");
     }
     cleanup = contributedCleanup;
+    registrationComplete = true;
     const usageSourceMetadata = await Promise.all(
       [...usageSources.values()]
         .sort((a, b) => a.id.localeCompare(b.id))
@@ -312,11 +339,24 @@ export function createPluginWorker(options: {
         .map(providerMetadata),
       usageSources: usageSourceMetadata,
     });
+    // Recovery can use the API without waiting for an unrelated lifecycle event.
+    const readyPaseo = paseo;
+    for (const [controller, handler] of readyHandlers) {
+      if (stopping || controller.signal.aborted) continue;
+      void Promise.resolve()
+        .then(() => {
+          if (controller.signal.aborted) return;
+          return handler({ paseo: readyPaseo, signal: controller.signal });
+        })
+        .catch((error) => console.error("Plugin readiness handler failed", error));
+    }
   }
 
   async function shutdown(): Promise<void> {
     if (stopping) return;
     stopping = true;
+    for (const controller of readyHandlers.keys()) controller.abort();
+    readyHandlers.clear();
     const releaseApi = paseo
       ?.dispose()
       .catch((error) => console.error("Plugin API cleanup failed", error));
