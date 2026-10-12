@@ -36,6 +36,19 @@ interface RecentProviderSessionProjectionOptions {
   providerLabel: string;
 }
 
+function projectContextPolicy(
+  config:
+    | Pick<AgentSessionConfig, "contextPolicy" | "contextStatus" | "profileId">
+    | null
+    | undefined,
+): Pick<AgentSnapshotPayload, "contextPolicy" | "contextStatus" | "profileId"> {
+  const fields: Pick<AgentSnapshotPayload, "contextPolicy" | "contextStatus" | "profileId"> = {};
+  if (config?.contextPolicy) fields.contextPolicy = config.contextPolicy;
+  if (config?.contextStatus) fields.contextStatus = config.contextStatus;
+  if (config?.profileId) fields.profileId = config.profileId;
+  return fields;
+}
+
 function normalizeThinkingOptionId(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim();
@@ -117,6 +130,7 @@ export function toAgentPayload(
     provider: agent.provider,
     cwd: agent.cwd,
     ...(agent.workspaceId ? { workspaceId: agent.workspaceId } : {}),
+    ...projectContextPolicy(agent.config),
     model: agent.config.model ?? null,
     thinkingOptionId,
     effectiveThinkingOptionId,
@@ -226,6 +240,7 @@ export function buildStoredAgentPayload(
     provider: record.provider,
     cwd: record.cwd,
     ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+    ...projectContextPolicy(record.config),
     model: record.config?.model ?? null,
     thinkingOptionId: record.config?.thinkingOptionId ?? null,
     effectiveThinkingOptionId: resolveEffectiveThinkingOptionId({
@@ -293,6 +308,9 @@ export function toRecentProviderSessionDescriptorPayload(
 
 function buildSerializableConfig(config: AgentSessionConfig): SerializableAgentConfig | null {
   const serializable: SerializableAgentConfig = {};
+  if (config.contextPolicy) serializable.contextPolicy = config.contextPolicy;
+  if (config.contextStatus) serializable.contextStatus = config.contextStatus;
+  if (config.profileId) serializable.profileId = config.profileId;
   if (config.modeId) {
     serializable.modeId = config.modeId;
   }

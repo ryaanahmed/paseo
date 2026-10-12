@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { AgentProviderDefinition } from "@getpaseo/protocol/provider-manifest";
 import type {
   AgentMode,
@@ -49,6 +49,7 @@ export interface UseAgentFormStateOptions {
 }
 
 export interface UseAgentFormStateResult {
+  selectedProfileId?: string;
   selectedServerId: string | null;
   selectedProvider: AgentProvider | null;
   selectedMode: string;
@@ -146,6 +147,10 @@ async function persistProviderPreferences(input: {
 
 export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFormStateResult {
   const { serverId, initialValues, workingDir, isVisible = true, isCreateFlow = true } = options;
+  const [profileSelection, setProfileSelection] = useState<{
+    serverId: string | null;
+    profileId?: string;
+  } | null>(null);
 
   const { preferences, isLoading: isPreferencesLoading, updatePreferences } = useFormPreferences();
   const preferenceOverlayRef = useRef(new OptimisticFormPreferences(preferences));
@@ -318,6 +323,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
         return;
       }
 
+      setProfileSelection({ serverId, profileId: profile.profileId });
       const previousProvider = formState.provider;
       const providerDef = selectableProviderDefinitionMap.get(provider);
       const providerModels = allProviderModels.get(provider) ?? null;
@@ -356,6 +362,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     },
     [
       allProviderModels,
+      serverId,
       formState,
       providerDefinitionMap,
       resolution,
@@ -470,10 +477,20 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
   const modelError = snapshotError;
 
   const workingDirIsEmpty = !workingDir.trim();
+  // Provider/model edits override launch defaults while retaining required policy.
+  let selectedProfileId: string | undefined;
+  if (profileSelection) {
+    if (profileSelection.serverId === serverId) {
+      selectedProfileId = profileSelection.profileId;
+    }
+  } else {
+    selectedProfileId = initialValues?.profileId;
+  }
 
   return useMemo(
     () => ({
       selectedServerId: serverId,
+      selectedProfileId,
       selectedProvider: formState.provider,
       selectedMode: formState.modeId,
       setModeFromUser,
@@ -505,6 +522,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     }),
     [
       serverId,
+      selectedProfileId,
       formState.provider,
       formState.modeId,
       formState.model,

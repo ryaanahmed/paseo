@@ -1,3 +1,4 @@
+import { GobstopperContextManager, stripGobstopperScope } from "./gobstopper-context.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
@@ -197,6 +198,9 @@ function buildStoredAgentConfig(record: StoredAgentRecord): AgentSessionConfig {
   if (!record.config) {
     return config;
   }
+  if (record.config.contextPolicy) config.contextPolicy = record.config.contextPolicy;
+  if (record.config.contextStatus) config.contextStatus = record.config.contextStatus;
+  if (record.config.profileId) config.profileId = record.config.profileId;
   if (record.config.model != null) config.model = record.config.model;
   if (record.config.thinkingOptionId != null) {
     config.thinkingOptionId = record.config.thinkingOptionId;
@@ -315,6 +319,7 @@ export interface CreateAgentOptions {
 }
 
 export interface AgentManagerOptions {
+  contextManager?: GobstopperContextManager;
   pluginLifecycle?: PluginLifecycle;
   clients?: ProviderClientMap;
   providerDefinitions?: ProviderEnabledMap;
@@ -715,6 +720,7 @@ function detachedAgentLabelPatch(labels: Record<string, string>): AgentLabelPatc
 }
 
 export class AgentManager {
+  private readonly contextManager: GobstopperContextManager | undefined;
   private readonly pluginLifecycle: PluginLifecycle | undefined;
   private readonly clients = new Map<AgentProvider, AgentClient>();
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
@@ -756,6 +762,7 @@ export class AgentManager {
   private acceptingAgentRegistrations = true;
 
   constructor(options: AgentManagerOptions) {
+    this.contextManager = options.contextManager;
     this.pluginLifecycle = options.pluginLifecycle;
     this.idFactory = options?.idFactory ?? (() => randomUUID());
     this.registry = options?.registry;
@@ -1250,7 +1257,12 @@ export class AgentManager {
         config,
         env: options.env,
       });
-      config = { ...request.config, internal: config.internal };
+      config = {
+        ...request.config,
+        internal: config.internal,
+        contextPolicy: config.contextPolicy,
+        profileId: config.profileId,
+      };
       options = { ...options, env: request.env };
     }
     await this.deleteAgentState(resolvedAgentId);
@@ -1267,7 +1279,7 @@ export class AgentManager {
     const launchContext = await this.buildLaunchContext(
       resolvedAgentId,
       client,
-      storedConfig.cwd,
+      storedConfig,
       paseoToolPolicy,
       options?.env,
       { reason: "create", purpose: "interactive", workspaceId: options.workspaceId ?? null },
@@ -1364,6 +1376,10 @@ export class AgentManager {
     // settled before the config is prepared, because a history load reads an archived
     // agent whose working directory may be gone.
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
+    if (record?.config?.contextPolicy) {
+      mergedConfig.contextPolicy = record.config.contextPolicy;
+      mergedConfig.profileId = record.config.profileId;
+    }
     const currentResumeOptions = record
       ? { purpose: record.archivedAt ? ("history" as const) : ("interactive" as const) }
       : resumeOptions;
@@ -1385,7 +1401,7 @@ export class AgentManager {
     const launchContext = await this.buildLaunchContext(
       resolvedAgentId,
       client,
-      storedConfig.cwd,
+      storedConfig,
       paseoToolPolicy,
       undefined,
       {
@@ -1446,7 +1462,7 @@ export class AgentManager {
     const launchContext = await this.buildLaunchContext(
       resolvedAgentId,
       client,
-      storedConfig.cwd,
+      storedConfig,
       paseoToolPolicy,
       undefined,
       { reason: "import", purpose: "interactive", workspaceId: input.workspaceId },
@@ -1530,6 +1546,8 @@ export class AgentManager {
     const refreshConfig = {
       ...existing.config,
       ...overrides,
+      contextPolicy: existing.config.contextPolicy,
+      profileId: existing.config.profileId,
       provider,
     } as AgentSessionConfig;
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
@@ -1541,7 +1559,7 @@ export class AgentManager {
     const launchContext = await this.buildLaunchContext(
       agentId,
       client,
-      storedConfig.cwd,
+      storedConfig,
       paseoToolPolicy,
       undefined,
       { reason: "refresh", purpose: "interactive", workspaceId: existing.workspaceId },
@@ -1671,6 +1689,16 @@ export class AgentManager {
         clearTimeout(timer);
       }
     }
+  }
+
+  releaseContext(agentId: string): Promise<void> {
+    return this.runLifecycleMutation(agentId, async () => {
+      const agent = this.agents.get(agentId);
+      if (agent && "session" in agent) {
+        throw new Error("Close the provider session before releasing its context scope");
+      }
+      await this.contextManager?.release(agentId);
+    });
   }
 
   closeAgent(agentId: string): Promise<void> {
@@ -5198,7 +5226,7 @@ export class AgentManager {
   private async buildLaunchContext(
     agentId: string,
     client: AgentClient,
-    cwd: string,
+    config: AgentSessionConfig,
     paseoToolPolicy: ProviderPaseoToolsPolicy | undefined,
     env?: Record<string, string>,
     opening?: {
@@ -5207,6 +5235,9 @@ export class AgentManager {
       workspaceId?: string | null;
     },
   ): Promise<AgentLaunchContext> {
+    const cwd = config.cwd;
+    const providerEnv = client.getLaunchEnvironment?.();
+    env = { ...providerEnv, ...env };
     if (this.pluginLifecycle) {
       const request: PluginSessionOpenRequest = {
         agentId,
@@ -5218,10 +5249,31 @@ export class AgentManager {
         env: { ...env },
       };
       const transformed = await this.pluginLifecycle.before("agent.session_open", request);
-      env = transformed.env;
+      env = { ...providerEnv, ...transformed.env };
+    }
+    // Account hooks run first. Required context policy is enforced after them,
+    // outside their best-effort failure handling.
+    let codexConfig: AgentLaunchContext["codexConfig"];
+    if (config.contextPolicy && opening?.purpose !== "history") {
+      if (!this.contextManager) {
+        throw new Error("Context policy requires the Gobstopper adapter on this daemon");
+      }
+      const scoped = await this.contextManager.prepare({
+        agentId,
+        provider: client.provider,
+        policy: config.contextPolicy,
+        env: { ...env },
+        requireExisting: opening?.reason === "resume" || opening?.reason === "refresh",
+      });
+      config.contextStatus = scoped.snapshot;
+      env = scoped.env;
+      codexConfig = scoped.codexConfig;
+    } else {
+      env = stripGobstopperScope({ ...env });
     }
     const context: AgentLaunchContext = {
       agentId,
+      codexConfig,
       env: {
         ...env,
         PASEO_AGENT_ID: agentId,

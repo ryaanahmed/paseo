@@ -5402,6 +5402,59 @@ function daemonConfigStoreStub(agentProfiles?: AgentProfile[]): Pick<DaemonConfi
 describe("agent profile listing MCP tool", () => {
   const logger = createTestLogger();
 
+  it("creates from a named profile without copying its provider settings", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const contextPolicy = {
+      providerWindowTokens: 1000000,
+      clientWindowTokens: 1000000,
+      outputReserveTokens: 64000,
+      thresholdTokens: 512000,
+    };
+    spies.agentManager.createAgent.mockResolvedValue({
+      id: "profile-agent",
+      provider: "codex",
+      cwd: process.cwd(),
+      currentModeId: null,
+      availableModes: [],
+      config: {},
+    } as ManagedAgent);
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      ensureWorkspaceForCreate: async () => "profile-workspace",
+      logger,
+      daemonConfigStore: daemonConfigStoreStub([
+        {
+          id: "worker",
+          name: "Worker",
+          provider: "codex",
+          model: "gpt-5.4",
+          contextPolicy,
+          featureValues: { fast: true, tools: true },
+        },
+      ]),
+    });
+    await invokeToolWithParsedInput(registeredTool(server, "create_agent"), {
+      profileId: "worker",
+      title: "Worker",
+      initialPrompt: "Do work",
+      background: true,
+      settings: { features: { fast: false } },
+    });
+    expect(spies.agentManager.createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        model: "gpt-5.4",
+        profileId: "worker",
+        contextPolicy,
+        featureValues: { fast: false, tools: true },
+      }),
+      undefined,
+      expect.any(Object),
+    );
+  });
+
   it("returns configured profiles, including notes", async () => {
     const { agentManager, agentStorage } = createTestDeps();
     const profiles: AgentProfile[] = [

@@ -1,3 +1,4 @@
+import { ContextPolicySchema } from "./agent-context-policy.js";
 import { z } from "zod";
 
 /**
@@ -17,6 +18,7 @@ export const AgentProfileSchema = z
     icon: z.string().optional(),
     /** An identity colour name shared with host badges. Unknown values draw unthemed. */
     color: z.string().optional(),
+    contextPolicy: ContextPolicySchema.optional(),
     provider: z.string(),
     model: z.string().optional(),
     modeId: z.string().optional(),

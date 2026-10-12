@@ -787,6 +787,7 @@ type NewWorkspaceComposerState = NonNullable<
 >;
 
 interface WorkspaceDraftSubmissionConfig {
+  profileId?: string;
   cwd: string;
   provider: AgentProvider;
   modeId: string | null;
@@ -895,6 +896,7 @@ function buildWorkspaceDraftSetupFromComposer(input: {
     modeId: input.composerState.selectedMode || null,
     model: input.composerState.effectiveModelId || null,
     thinkingOptionId: input.composerState.effectiveThinkingOptionId || null,
+    profileId: input.composerState.selectedProfileId,
     featureValues: input.composerState.featureValues ?? {},
   };
 }
@@ -928,6 +930,7 @@ function buildComposerInitialValues(input: {
       modeId: input.initialSetup.modeId,
       model: input.initialSetup.model,
       thinkingOptionId: input.initialSetup.thinkingOptionId,
+      profileId: input.initialSetup.profileId,
     };
   }
   return undefined;
@@ -975,6 +978,7 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
       modeId: composerState.selectedMode || undefined,
       model: composerState.effectiveModelId || undefined,
       thinkingOptionId: composerState.effectiveThinkingOptionId || undefined,
+      profileId: composerState.selectedProfileId,
       featureValues: composerState.featureValues,
     },
     initialPrompt: text,
@@ -1088,6 +1092,7 @@ function resolveWorkspaceDraftSubmissionConfig(input: {
       modeId: initialSetup.modeId,
       model: initialSetup.model,
       thinkingOptionId: initialSetup.thinkingOptionId,
+      profileId: initialSetup.profileId,
       featureValues: initialSetup.featureValues,
       target: { kind: "draft", draftId, setup: initialSetup },
     };
@@ -1098,6 +1103,7 @@ function resolveWorkspaceDraftSubmissionConfig(input: {
     modeId: composerState.selectedMode || null,
     model: composerState.effectiveModelId || null,
     thinkingOptionId: composerState.effectiveThinkingOptionId || null,
+    profileId: composerState.selectedProfileId,
     featureValues: composerState.featureValues,
     target: { kind: "draft", draftId },
   };
@@ -1153,6 +1159,7 @@ function submitWorkspaceDraft(input: SubmitDraftInput): SubmitOutcome {
     provider: submission.provider,
     clientMessageId,
     timestamp,
+    ...(submission.profileId ? { profileId: submission.profileId } : {}),
     ...(submission.modeId ? { modeId: submission.modeId } : {}),
     ...(submission.model ? { model: submission.model } : {}),
     ...(submission.thinkingOptionId ? { thinkingOptionId: submission.thinkingOptionId } : {}),

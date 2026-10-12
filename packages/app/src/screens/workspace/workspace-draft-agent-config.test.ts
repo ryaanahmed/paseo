@@ -20,3 +20,9 @@ describe("workspace-draft-agent-config", () => {
     });
   });
 });
+
+it("forwards scoped profile identity to daemon creation", () => {
+  expect(
+    buildWorkspaceDraftAgentConfig({ provider: "claude", cwd: "/repo", profileId: "worker" }),
+  ).toEqual({ provider: "claude", cwd: "/repo", profileId: "worker" });
+});

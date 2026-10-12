@@ -46,6 +46,10 @@ interface AgentInspect {
   }>;
   Worktree: string | null;
   ParentAgentId: string | null;
+  ProfileId?: AgentSnapshotPayload["profileId"];
+  ContextPolicy?: AgentSnapshotPayload["contextPolicy"];
+  /** Scope-store reading at observedAt, not usage from an agent request. */
+  ContextStatus?: AgentSnapshotPayload["contextStatus"];
 }
 
 /** Key-value row for table display */
@@ -151,6 +155,9 @@ function toInspectData(snapshot: AgentSnapshotPayload): AgentInspect {
     })),
     Worktree: snapshot.labels?.["paseo.worktree"] ?? null,
     ParentAgentId: snapshot.labels?.[PARENT_AGENT_ID_LABEL] ?? null,
+    ...(snapshot.profileId ? { ProfileId: snapshot.profileId } : {}),
+    ...(snapshot.contextPolicy ? { ContextPolicy: snapshot.contextPolicy } : {}),
+    ...(snapshot.contextStatus ? { ContextStatus: snapshot.contextStatus } : {}),
   };
 }
 
@@ -170,6 +177,14 @@ function toInspectRows(agent: AgentInspect): InspectRow[] {
     { key: "CreatedAt", value: agent.CreatedAt },
     { key: "UpdatedAt", value: agent.UpdatedAt },
   ];
+
+  if (agent.ProfileId) rows.push({ key: "ProfileId", value: agent.ProfileId });
+  if (agent.ContextPolicy) {
+    rows.push({ key: "ContextPolicy", value: JSON.stringify(agent.ContextPolicy) });
+  }
+  if (agent.ContextStatus) {
+    rows.push({ key: "ContextStatus", value: JSON.stringify(agent.ContextStatus) });
+  }
 
   if (agent.LastUsage) {
     rows.push({

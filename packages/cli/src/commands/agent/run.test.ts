@@ -156,3 +156,9 @@ describe("runRunCommand option validation", () => {
     );
   });
 });
+
+it("rejects an empty profile before contacting the daemon", async () => {
+  await expect(
+    runRunCommand("Do work", { profile: "  ", daemonTarget }, {} as never),
+  ).rejects.toMatchObject({ code: "INVALID_PROFILE" });
+});

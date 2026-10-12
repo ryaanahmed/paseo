@@ -1,3 +1,4 @@
+import { GobstopperContextManager } from "./gobstopper-context.js";
 import { expect, test, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -2857,6 +2858,7 @@ test("createAgent passes daemon launch env through the provider launch context",
   expect(client.lastLaunchContext).toEqual({
     agentId: snapshot.id,
     env: {
+      GOBSTOPPER_SCOPE: "",
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
     },
@@ -4187,6 +4189,7 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: resumed.id,
     env: {
+      GOBSTOPPER_SCOPE: "",
       PASEO_AGENT_ID: resumed.id,
       PASEO_AGENT_CWD: workdir,
     },
@@ -4295,6 +4298,7 @@ test("importProviderSession imports the selected session without listing and pub
   expect(client.importLaunchContext).toEqual({
     agentId: imported.id,
     env: {
+      GOBSTOPPER_SCOPE: "",
       PASEO_AGENT_ID: imported.id,
       PASEO_AGENT_CWD: workdir,
     },
@@ -4398,6 +4402,7 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
   expect(client.lastCreateLaunchContext).toEqual({
     agentId: snapshot.id,
     env: {
+      GOBSTOPPER_SCOPE: "",
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
     },
@@ -4410,6 +4415,7 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: snapshot.id,
     env: {
+      GOBSTOPPER_SCOPE: "",
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
     },
@@ -11466,4 +11472,152 @@ test("usage session is a pure read of the live adapter and disappears on close",
     await manager.closeAgent(agent.id);
   }
   expect(manager.usageSession(agent.id)).toBeNull();
+});
+
+const contextPolicyForTest = {
+  providerWindowTokens: 1_000_000,
+  clientWindowTokens: 1_000_000,
+  outputReserveTokens: 32_000,
+  thresholdTokens: 500_000,
+};
+
+test("required context policy refuses launch without its adapter", async () => {
+  const client = new TestAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  await expect(
+    manager.createAgent(
+      {
+        provider: "codex",
+        cwd: tmpdir(),
+        contextPolicy: contextPolicyForTest,
+      },
+      undefined,
+      { workspaceId: undefined },
+    ),
+  ).rejects.toThrow("requires the Gobstopper adapter");
+  expect(client.createdConfigs).toEqual([]);
+});
+
+test("context policy survives refresh and disk restore without profile re-resolution", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "paseo-policy-lifecycle-"));
+  const registry = new AgentStorage(join(directory, "agents"), logger);
+  const adapter = new GobstopperContextManager({ stateDirectory: join(directory, "scopes") });
+  // Scope CLI and HTTP behavior are exercised by the adapter's executable fixture.
+  const prepare = vi.spyOn(adapter, "prepare").mockResolvedValue({
+    env: { GOBSTOPPER_SCOPE: "private-fixture-capability" },
+    snapshot: {
+      scopeId: "public-id",
+      effectiveInputTokens: 500000,
+      inputCapacityTokens: 968000,
+      limitingReason: "scope_threshold",
+      baseThresholdTokens: 128000,
+      observedAt: "2026-10-12T00:00:00Z",
+    },
+  });
+  const client = new TestAgentClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry,
+    contextManager: adapter,
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent(
+      {
+        provider: "codex",
+        cwd: directory,
+        profileId: "worker",
+        contextPolicy: contextPolicyForTest,
+      },
+      undefined,
+      { workspaceId: undefined },
+    );
+    expect(prepare.mock.calls[0]?.[0].requireExisting).toBe(false);
+    expect(toAgentPayload(agent).contextPolicy).toEqual(contextPolicyForTest);
+    expect(JSON.stringify(toAgentPayload(agent))).not.toContain("private-fixture-capability");
+    await manager.reloadAgentSession(agent.id, { contextPolicy: undefined, profileId: "changed" });
+    expect(prepare.mock.calls[1]?.[0]).toMatchObject({
+      agentId: agent.id,
+      policy: contextPolicyForTest,
+      requireExisting: true,
+    });
+    await manager.closeAgent(agent.id);
+    const restoredStorage = new AgentStorage(join(directory, "agents"), logger);
+    const record = await restoredStorage.get(agent.id);
+    expect(record?.config?.contextPolicy).toEqual(contextPolicyForTest);
+    expect(record?.config?.profileId).toBe("worker");
+    const restarted = new AgentManager({
+      clients: { codex: client },
+      registry: restoredStorage,
+      contextManager: adapter,
+      logger,
+    });
+    const resumed = await ensureAgentLoaded(agent.id, {
+      agentManager: restarted,
+      agentStorage: restoredStorage,
+      logger,
+    });
+    expect(resumed?.config.contextPolicy).toEqual(contextPolicyForTest);
+    expect(prepare.mock.calls[2]?.[0]).toMatchObject({
+      agentId: agent.id,
+      policy: contextPolicyForTest,
+      requireExisting: true,
+    });
+    await restarted.closeAgent(agent.id);
+  } finally {
+    prepare.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("context policy checks provider-configured routes before opening a session", async () => {
+  class ConfiguredClaudeClient extends TestAgentClient {
+    getLaunchEnvironment() {
+      return { CLAUDE_CODE_USE_BEDROCK: "1" };
+    }
+  }
+  const client = new ConfiguredClaudeClient("claude");
+  const manager = new AgentManager({
+    clients: { claude: client },
+    logger,
+    contextManager: new GobstopperContextManager({
+      stateDirectory: join(tmpdir(), "unused-scope-state"),
+    }),
+  });
+  await expect(
+    manager.createAgent(
+      { provider: "claude", cwd: tmpdir(), contextPolicy: contextPolicyForTest },
+      undefined,
+      { workspaceId: undefined },
+    ),
+  ).rejects.toThrow("unsupported_provider_route");
+  expect(client.createdConfigs).toEqual([]);
+});
+
+test("unscoped launches clear provider-configured parent scopes and retain other headers", async () => {
+  let launched: AgentLaunchContext | undefined;
+  class ConfiguredClaudeClient extends TestAgentClient {
+    getLaunchEnvironment() {
+      return {
+        GOBSTOPPER_SCOPE: "parent-private",
+        ANTHROPIC_CUSTOM_HEADERS: "X-Trace: retain\nX-Gobstopper-Scope: parent-private",
+      };
+    }
+    override async createSession(config: AgentSessionConfig, context?: AgentLaunchContext) {
+      launched = context;
+      return super.createSession(config);
+    }
+  }
+  const manager = new AgentManager({
+    clients: { claude: new ConfiguredClaudeClient("claude") },
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "claude", cwd: tmpdir() }, undefined, {
+    workspaceId: undefined,
+  });
+  expect(launched?.env).toMatchObject({
+    GOBSTOPPER_SCOPE: "",
+    ANTHROPIC_CUSTOM_HEADERS: "X-Trace: retain",
+  });
+  await manager.closeAgent(agent.id);
 });

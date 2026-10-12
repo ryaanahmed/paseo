@@ -1541,6 +1541,10 @@ export class ClaudeAgentClient implements AgentClient {
     return resolveConfiguredClaudeModel(model);
   }
 
+  getLaunchEnvironment(): Record<string, string> | undefined {
+    return this.runtimeSettings?.env;
+  }
+
   async createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,

@@ -60,6 +60,7 @@ const DRAFT_CAPABILITIES: AgentCapabilityFlags = {
 };
 
 interface AutoSubmitConfig {
+  profileId?: string;
   provider: string;
   modeId: string | null;
   model: string | null;
@@ -73,12 +74,14 @@ function resolveAutoSubmitConfig(
     modeId?: string | null;
     model?: string | null;
     thinkingOptionId?: string | null;
+    profileId?: string;
     featureValues?: Record<string, unknown>;
   } | null,
 ): AutoSubmitConfig | null {
   if (!pending) return null;
   return {
     provider: pending.provider,
+    profileId: pending.profileId,
     modeId: pending.modeId ?? null,
     model: pending.model ?? null,
     thinkingOptionId: pending.thinkingOptionId ?? null,
@@ -130,6 +133,13 @@ function resolveDraftModeId(input: {
   return null;
 }
 
+function resolveDraftProfileId(input: {
+  autoSubmitConfig: AutoSubmitConfig | null;
+  composerState: { selectedProfileId?: string };
+}): string | undefined {
+  return input.autoSubmitConfig?.profileId ?? input.composerState.selectedProfileId;
+}
+
 async function submitDraftCreateRequest(input: {
   draftId: string;
   attempt: { clientMessageId: string };
@@ -143,6 +153,7 @@ async function submitDraftCreateRequest(input: {
   autoSubmitConfig: AutoSubmitConfig | null;
   composerState: {
     selectedProvider: string | null;
+    selectedProfileId?: string;
     selectedMode: string;
     modeOptions: readonly { id: string }[];
     effectiveModelId: string | null;
@@ -182,6 +193,7 @@ async function submitDraftCreateRequest(input: {
   });
   const config = buildWorkspaceDraftAgentConfig({
     provider,
+    profileId: resolveDraftProfileId({ autoSubmitConfig, composerState }),
     cwd,
     ...modeIdOverride,
     model: autoSubmitConfig?.model ?? (composerState.effectiveModelId || undefined),
@@ -273,6 +285,7 @@ function buildDraftInitialValues(input: {
   if (!input.initialSetup) return undefined;
   return {
     provider: input.initialSetup.provider,
+    profileId: input.initialSetup.profileId,
     modeId: input.initialSetup.modeId,
     model: input.initialSetup.model,
     thinkingOptionId: input.initialSetup.thinkingOptionId,

@@ -1679,3 +1679,47 @@ test("canceled timeline handles and captured state are collectible while their A
   );
   expect(result.stdout).toContain('"phase":"API alive"');
 }, 20000);
+
+test("agent create sends daemon profile and explicit policy without resolving them locally", async () => {
+  const { client, ws } = await connectClient({ agentContextPolicy: true });
+  const contextPolicy = {
+    providerWindowTokens: 1000000,
+    clientWindowTokens: 1000000,
+    outputReserveTokens: 64000,
+    thresholdTokens: 512000,
+  };
+  const createPromise = client.agents.create({
+    config: { profileId: "worker", contextPolicy },
+    cwd: "/repo/sdk",
+    prompt: "ship it",
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "create_agent_request",
+    config: { profileId: "worker", contextPolicy, cwd: "/repo/sdk" },
+  });
+  expect(request.config).not.toHaveProperty("provider");
+  ws.message(
+    sessionMessage({
+      type: "status",
+      payload: {
+        status: "agent_created",
+        requestId: request.requestId,
+        agentId: "agent_sdk",
+        agent: createAgent(),
+      },
+    }),
+  );
+  await createPromise;
+  await client.close();
+});
+
+test("agent create refuses policy-bearing requests on an older daemon", async () => {
+  const { client, ws } = await connectClient();
+  const sentCount = ws.sent.length;
+  await expect(
+    client.agents.create({ config: { profileId: "worker" }, cwd: "/repo/sdk" }),
+  ).rejects.toThrow("Update the host");
+  expect(ws.sent).toHaveLength(sentCount);
+  await client.close();
+});

@@ -535,6 +535,7 @@ type CapturedFakeCodexRecord = Record<string, unknown>;
 async function runCustomCodexProviderTurn(
   providerId: string,
   baseUrl: string,
+  options?: { launchContext: AgentLaunchContext; resume: boolean },
 ): Promise<CapturedFakeCodexRecord[]> {
   const tempDir = await mkdtemp(path.join(tmpdir(), "codex-custom-provider-"));
   const fakeAppServerPath = path.join(tempDir, "fake-codex-app-server.cjs");
@@ -551,6 +552,7 @@ fs.appendFileSync(capturePath, JSON.stringify({
   kind: "env",
   OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  GOBSTOPPER_SCOPE: process.env.GOBSTOPPER_SCOPE,
 }) + "\\n");
 
 function record(method, params) {
@@ -564,7 +566,7 @@ function resultFor(method) {
   if (method === "config/read") return { config: {} };
   if (method === "getUserSavedConfig") return { config: {} };
   if (method === "model/list") return { data: [{ id: "custom-model", isDefault: true }] };
-  if (method === "thread/start") return { thread: { id: "thread-1" } };
+  if (method === "thread/start" || method === "thread/resume") return { thread: { id: "thread-1" } };
   if (method === "turn/start") return {};
   return {};
 }
@@ -599,12 +601,20 @@ process.stdin.on("data", (chunk) => {
       },
     },
   });
-  const session = await registry[providerId].createClient(createTestLogger()).createSession({
+  const client = registry[providerId].createClient(createTestLogger());
+  const config = {
     provider: providerId,
     cwd: "/workspace/project",
     modeId: "auto",
     model: "custom-model",
-  });
+  };
+  const session = options?.resume
+    ? await client.resumeSession(
+        { provider: providerId, sessionId: "thread-1" },
+        config,
+        options.launchContext,
+      )
+    : await client.createSession(config, options?.launchContext);
 
   try {
     await session.startTurn("use the custom endpoint");
@@ -7072,4 +7082,33 @@ describe("Codex denied plan approvals", () => {
       metadata: { approved: false },
     });
   });
+});
+
+test.each([false, true])("Codex scope routing reaches app-server on resume=%s", async (resume) => {
+  const codexConfig = {
+    model_provider: "paseo_gobstopper",
+    model_providers: {
+      paseo_gobstopper: {
+        name: "Gobstopper",
+        base_url: "http://127.0.0.1:8260/backend-api/codex",
+        wire_api: "responses",
+        requires_openai_auth: true,
+        env_http_headers: { "X-Gobstopper-Scope": "GOBSTOPPER_SCOPE" },
+      },
+    },
+  };
+  const records = await runCustomCodexProviderTurn("scoped-codex", "https://old.example/v1", {
+    resume,
+    launchContext: { codexConfig, env: { GOBSTOPPER_SCOPE: "private-test-capability" } },
+  });
+  expect(records.find((record) => record.kind === "env")).toMatchObject({
+    GOBSTOPPER_SCOPE: "private-test-capability",
+  });
+  const method = resume ? "thread/resume" : "thread/start";
+  expect(records.find((record) => record.method === method)).toMatchObject({
+    params: { config: codexConfig },
+  });
+  expect(JSON.stringify(records.filter((record) => record.kind === "request"))).not.toContain(
+    "private-test-capability",
+  );
 });
