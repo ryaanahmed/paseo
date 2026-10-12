@@ -2536,6 +2536,7 @@ export const zhCN: TranslationResources = {
         emptyState: "No profiles yet. Add one to launch terminals with a specific command.",
       },
       agentProfiles: {
+        rolesUnsupported: "请更新此主机，以便通过角色配置创建代理。",
         sectionTitle: "Agent 配置",
         unavailable: "连接到这个 Host 以管理 Agent 配置",
         unsupported: "此 Host 运行的 Daemon 尚不支持 Agent 配置",

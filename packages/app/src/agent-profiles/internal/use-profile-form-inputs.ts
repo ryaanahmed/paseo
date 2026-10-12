@@ -1,3 +1,4 @@
+import { useSessionStore } from "@/stores/session-store";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useFetchQuery } from "@/data/query";
@@ -75,4 +76,19 @@ export function useAgentProfileFormFeatures(input: {
     }
     model.applyFeaturesUnavailable(requestKey);
   }, [isError, model, requestKey]);
+}
+
+export function useAgentProfileFormCapabilities(input: {
+  serverId: string;
+  model: AgentProfileFormModel;
+}): void {
+  const agentRoles = useSessionStore(
+    (state) => state.sessions[input.serverId]?.serverInfo?.features?.agentRoles === true,
+  );
+  const agentContextPolicy = useSessionStore(
+    (state) => state.sessions[input.serverId]?.serverInfo?.features?.agentContextPolicy === true,
+  );
+  useEffect(() => {
+    input.model.applyCapabilities({ agentRoles, agentContextPolicy });
+  }, [agentRoles, agentContextPolicy, input.model]);
 }

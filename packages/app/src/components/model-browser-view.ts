@@ -1,3 +1,4 @@
+import type { AgentProfilePickerRow } from "@/agent-profiles/internal/use-agent-profile-picker";
 import {
   filterAndRankModelRows,
   getAllProviderModelRows,
@@ -47,6 +48,20 @@ export function groupProfilesByProviderModel<T extends ModelProfileRef>(
     }
   }
   return lookup;
+}
+
+/** Search combines role, saved variant and model terms without changing provider selection. */
+export function filterAgentProfileRows(
+  rows: readonly AgentProfilePickerRow[],
+  normalizedQuery: string,
+): AgentProfilePickerRow[] {
+  const terms = normalizedQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return rows.filter((row) => {
+    const searchable = [row.name, row.role ?? "", row.provider, row.modelId, row.summary]
+      .join(" ")
+      .toLowerCase();
+    return terms.every((term) => searchable.includes(term));
+  });
 }
 
 /** What the root view shows: the provider drill-down, or ranked cross-provider results. */

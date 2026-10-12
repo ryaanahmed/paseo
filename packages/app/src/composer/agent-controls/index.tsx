@@ -83,6 +83,7 @@ import { ComposerToolbarGlyph } from "@/composer/agent-controls/glyph";
 import { AgentControlTrigger } from "@/composer/agent-controls/control";
 import { CompactModelSheet } from "@/composer/agent-controls/model-sheet";
 import {
+  AgentLaunchDetails,
   useAgentProfileEditor,
   useAgentProfilePicker,
   type AgentProfileApplyTarget,
@@ -1793,6 +1794,7 @@ export const AgentControls = memo(function AgentControls({
     <>
       {commandCenterRegistration}
       {profileEditor.element}
+      <AgentLaunchDetails serverId={serverId} agentId={agentId} />
       <ControlledAgentControls
         provider={agent.provider}
         modelSelectorProviders={agentModelSelectorProviders}

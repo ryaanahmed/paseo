@@ -132,3 +132,15 @@ it("keeps context-policy profile identity for creation but excludes it from live
   expect(resolved.profileId).toBe("ui-work");
   expect(toAgentConfigApply(resolved)).not.toHaveProperty("profileId");
 });
+
+it("keeps role-only profile identity without applying role or context to a running agent", () => {
+  const resolved = materializeAgentProfile(profile({ role: "ustad", model: "claude-opus-5" }));
+  expect(resolved.profileId).toBe("ui-work");
+  expect(toAgentConfigApply(resolved)).toEqual({ modelId: "claude-opus-5" });
+});
+
+it("does not infer a role from a saved variant name", () => {
+  const resolved = materializeAgentProfile(profile({ name: "Ustad-Astra" }));
+  expect(resolved).not.toHaveProperty("profileId");
+  expect(resolved).not.toHaveProperty("role");
+});

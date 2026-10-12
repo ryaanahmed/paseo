@@ -7,7 +7,7 @@ import type { AgentConfigApply, AgentProfile } from "@getpaseo/protocol/messages
  * every consumer would otherwise re-derive the same trim-and-drop rules.
  */
 export interface MaterializedAgentProfile {
-  /** Scoped launch identity; never applied to an existing agent. */
+  /** Launch identity for immutable role/context policy; never applied to an existing agent. */
   profileId?: string;
   provider: string;
   /** Empty when the profile names no model, meaning "leave the model alone". */
@@ -23,7 +23,7 @@ function trimmed(value: string | undefined): string {
 
 export function materializeAgentProfile(profile: AgentProfile): MaterializedAgentProfile {
   return {
-    ...(profile.contextPolicy ? { profileId: profile.id } : {}),
+    ...(profile.contextPolicy || profile.role ? { profileId: profile.id } : {}),
     provider: trimmed(profile.provider),
     modelId: trimmed(profile.model),
     modeId: trimmed(profile.modeId),

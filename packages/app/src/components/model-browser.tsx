@@ -56,6 +56,7 @@ import { useProviderSettingsStore } from "@/stores/provider-settings-store";
 import { useCurrentOverlayLayer } from "@/lib/overlay-root";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import {
+  filterAgentProfileRows,
   groupProfilesByProviderModel,
   resolveInitialModelBrowserView,
   resolveModelBrowserAllView,
@@ -887,8 +888,8 @@ function AgentProfilePickerRowView({
 
 /**
  * Pinned above the provider list. Rows are actions, not selections: applying a
- * profile writes its values into the composer and nothing stays bound to it, so
- * there is no checkmark and no active row to show.
+ * profile writes editable launch values into the composer while its role/context
+ * identity remains attached for creation. It is not a model-row selection.
  */
 function AgentProfilesPickerSection({
   rows,
@@ -1295,27 +1296,22 @@ function ProviderModelBrowserContent({
     () => (provider ? filterAndRankModelRows(getProviderModelRows(provider), normalizedQuery) : []),
     [normalizedQuery, provider],
   );
-  const providerProfileRows = useMemo(
-    () => profiles?.rows.filter((row) => row.provider === view.providerId) ?? [],
-    [profiles, view.providerId],
-  );
+  const providerProfileRows = useMemo(() => {
+    const rows = profiles?.rows.filter((row) => row.provider === view.providerId) ?? [];
+    return filterAgentProfileRows(rows, normalizedQuery);
+  }, [normalizedQuery, profiles, view.providerId]);
+  const hasVisibleProfiles = normalizedQuery.length === 0 || providerProfileRows.length > 0;
+  const showProfileHeader = showProfilesSection && profiles !== null && hasVisibleProfiles;
   const profileHeader = useMemo(
     () =>
-      normalizedQuery.length === 0 && showProfilesSection && profiles ? (
+      showProfileHeader ? (
         <AgentProfilesPickerContent
           rows={providerProfileRows}
           onApplyProfile={onApplyProfile}
           onEditProfiles={onEditProfiles}
         />
       ) : undefined,
-    [
-      normalizedQuery,
-      onApplyProfile,
-      onEditProfiles,
-      profiles,
-      providerProfileRows,
-      showProfilesSection,
-    ],
+    [onApplyProfile, onEditProfiles, providerProfileRows, showProfileHeader],
   );
 
   if (!provider) return <ModelSearchEmptyState />;
@@ -1340,8 +1336,8 @@ function ProviderModelBrowserContent({
       />
     );
   }
-  if (visibleRows.length === 0) {
-    return profileHeader ?? <ModelSearchEmptyState />;
+  if (visibleRows.length === 0 && !profileHeader) {
+    return <ModelSearchEmptyState />;
   }
   return (
     <ModelRowList
@@ -1404,6 +1400,22 @@ function ModelBrowserContent({
       }),
     [isSearchFocused, normalizedQuery, providers, searchAllOnFocus],
   );
+  const matchingProfileRows = useMemo(
+    () => filterAgentProfileRows(profiles?.rows ?? [], normalizedQuery),
+    [normalizedQuery, profiles],
+  );
+  const showMatchingProfiles = showProfilesSection && matchingProfileRows.length > 0;
+  const searchProfileHeader = useMemo(
+    () =>
+      showMatchingProfiles ? (
+        <AgentProfilesPickerSection
+          rows={matchingProfileRows}
+          onApplyProfile={onApplyProfile}
+          onEditProfiles={onEditProfiles}
+        />
+      ) : undefined,
+    [matchingProfileRows, onApplyProfile, onEditProfiles, showMatchingProfiles],
+  );
   const hasResults = profiles !== null || providers.length > 0 || rootBrowseContent != null;
 
   if (view.kind === "provider") {
@@ -1430,7 +1442,7 @@ function ModelBrowserContent({
     );
   }
 
-  if (allView.kind === "noSearchMatches") {
+  if (allView.kind === "noSearchMatches" && !showMatchingProfiles) {
     return (
       <View style={styles.emptyState} testID="model-search-empty">
         <ThemedSearch size={ICON_SIZE.md} uniProps={foregroundMutedMapping} />
@@ -1441,11 +1453,13 @@ function ModelBrowserContent({
     );
   }
 
-  if (allView.kind === "searchResults") {
+  if (allView.kind !== "browse") {
+    const rows = allView.kind === "searchResults" ? allView.rows : [];
     return (
       <ModelRowList
         serverId={serverId}
-        rows={allView.rows}
+        rows={rows}
+        header={searchProfileHeader}
         selectedProvider={selectedProvider}
         selectedModel={selectedModel}
         onSelect={onSelect}

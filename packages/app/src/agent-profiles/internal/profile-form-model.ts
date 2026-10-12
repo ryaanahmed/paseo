@@ -5,6 +5,8 @@ import type {
   AgentSelectOption,
   ProviderSnapshotEntry,
 } from "@getpaseo/protocol/agent-types";
+import type { AgentRole } from "@getpaseo/protocol/agent-profile";
+import { ContextPolicySchema, type ContextPolicy } from "@getpaseo/protocol/agent-context-policy";
 import type { AgentProfile } from "@getpaseo/protocol/messages";
 import { formatAgentModeLabel, formatThinkingOptionLabel } from "@/agent-controls/labels";
 import { applyFeatureValues, pruneFeatureValues } from "@/hooks/feature-preferences";
@@ -76,7 +78,20 @@ export interface AgentProfileFormDisclosure {
   showFeaturesField: boolean;
 }
 
+export type ContextPolicyField = keyof ContextPolicy;
+export type ContextPolicyInputs = Record<ContextPolicyField, string>;
+
+export interface AgentProfileFormCapabilities {
+  agentRoles: boolean;
+  agentContextPolicy: boolean;
+}
+
 export interface AgentProfileFormState {
+  role: AgentRole | null;
+  contextMode: "host-default" | "explicit";
+  contextInputs: ContextPolicyInputs;
+  contextError: string | null;
+  capabilities: AgentProfileFormCapabilities;
   mode: "create" | "edit";
   name: string;
   icon: string;
@@ -121,6 +136,10 @@ export interface AgentProfileFormModel {
   applyFeatures: (requestKey: string, features: readonly AgentFeature[]) => void;
   /** Resolve a request that produced no usable features (provider error). */
   applyFeaturesUnavailable: (requestKey: string) => void;
+  applyCapabilities: (value: AgentProfileFormCapabilities) => void;
+  setRole: (value: AgentRole | null) => void;
+  setContextMode: (value: "host-default" | "explicit") => void;
+  setContextInput: (field: ContextPolicyField, value: string) => void;
   setName: (value: string) => void;
   setAppearance: (value: { icon: string; color: string }) => void;
   setNotes: (value: string) => void;
@@ -336,13 +355,51 @@ export function buildFeatureRequestKey(request: AgentProfileFeatureRequest | nul
   ].join("|");
 }
 
+function resolveContextPolicy(
+  state: Pick<AgentProfileFormState, "contextMode" | "contextInputs">,
+): { policy: ContextPolicy | null; error: string | null } {
+  if (state.contextMode === "host-default") {
+    return { policy: null, error: null };
+  }
+  const inputs = state.contextInputs;
+  const fields = Object.values(inputs);
+  if (fields.some((value) => !/^\d+$/.test(value.trim()))) {
+    return { policy: null, error: "Enter whole token counts for all four context limits." };
+  }
+  const result = ContextPolicySchema.safeParse({
+    providerWindowTokens: Number(inputs.providerWindowTokens),
+    clientWindowTokens: Number(inputs.clientWindowTokens),
+    outputReserveTokens: Number(inputs.outputReserveTokens),
+    thresholdTokens: Number(inputs.thresholdTokens),
+  });
+  if (!result.success) {
+    return {
+      policy: null,
+      error: "Windows and threshold must be positive; output reserve can be zero.",
+    };
+  }
+  const policy = result.data;
+  const inputCapacity =
+    Math.min(policy.providerWindowTokens, policy.clientWindowTokens) - policy.outputReserveTokens;
+  if (policy.thresholdTokens > inputCapacity) {
+    return {
+      policy: null,
+      error: "Threshold must fit within the smaller window after subtracting the output reserve.",
+    };
+  }
+  return { policy, error: null };
+}
+
 function buildSubmitValue(state: AgentProfileFormState): AgentProfileValue | null {
   const name = state.name.trim();
   const notes = state.notes.trim();
   if (!name || !state.provider) {
     return null;
   }
+  const { policy } = resolveContextPolicy(state);
   return {
+    ...(state.role ? { role: state.role } : {}),
+    ...(policy ? { contextPolicy: policy } : {}),
     name,
     ...(state.icon ? { icon: state.icon } : {}),
     ...(state.color ? { color: state.color } : {}),
@@ -372,6 +429,23 @@ function seedDisplay(value: string | undefined): AgentProfileFormDisplay | null 
   return value ? { label: value } : null;
 }
 
+function seedContextInputs(policy: ContextPolicy | undefined): ContextPolicyInputs {
+  if (!policy) {
+    return {
+      providerWindowTokens: "",
+      clientWindowTokens: "",
+      outputReserveTokens: "",
+      thresholdTokens: "",
+    };
+  }
+  return {
+    providerWindowTokens: policy.providerWindowTokens.toString(),
+    clientWindowTokens: policy.clientWindowTokens.toString(),
+    outputReserveTokens: policy.outputReserveTokens.toString(),
+    thresholdTokens: policy.thresholdTokens.toString(),
+  };
+}
+
 /**
  * Edit mode seeds every value AND display from the stored profile alone: the
  * catalog is not loaded yet, so `applyProviderCatalog` does the upgrading later.
@@ -383,6 +457,11 @@ function buildInitialState(snapshot: AgentProfileFormSnapshot): AgentProfileForm
   const provider = seed?.provider ?? profile.provider;
   const modelId = seed?.modelId ?? profile.model ?? "";
   return {
+    role: profile.role ?? null,
+    contextMode: profile.contextPolicy ? "explicit" : "host-default",
+    contextInputs: seedContextInputs(profile.contextPolicy),
+    contextError: null,
+    capabilities: { agentRoles: false, agentContextPolicy: false },
     mode: snapshot.mode,
     name,
     icon: profile.icon ?? "",
@@ -494,11 +573,13 @@ export function openAgentProfileForm(snapshot: AgentProfileFormSnapshot): AgentP
         hasProvider && (thinking.length > 0 || Boolean(withOptions.thinkingOptionId)),
       showFeaturesField: hasProvider && features.length > 0,
     };
+    const contextError = resolveContextPolicy(withOptions).error;
     const canSubmit =
+      contextError === null &&
       withOptions.name.trim().length > 0 &&
       withOptions.provider.length > 0 &&
       !withOptions.isSubmitting;
-    const resolved: AgentProfileFormState = { ...withOptions, disclosure, canSubmit };
+    const resolved: AgentProfileFormState = { ...withOptions, disclosure, canSubmit, contextError };
     return { ...resolved, submitValue: canSubmit ? buildSubmitValue(resolved) : null };
   }
 
@@ -550,6 +631,21 @@ export function openAgentProfileForm(snapshot: AgentProfileFormSnapshot): AgentP
       resolvedFeatures = [];
       publish((current) => current);
     },
+    applyCapabilities: (value) => publish((current) => ({ ...current, capabilities: value })),
+    setRole: (value) =>
+      publish((current) =>
+        current.capabilities.agentRoles ? { ...current, role: value } : current,
+      ),
+    setContextMode: (value) =>
+      publish((current) =>
+        current.capabilities.agentContextPolicy ? { ...current, contextMode: value } : current,
+      ),
+    setContextInput: (field, value) =>
+      publish((current) =>
+        current.capabilities.agentContextPolicy
+          ? { ...current, contextInputs: { ...current.contextInputs, [field]: value } }
+          : current,
+      ),
     setName: (value) => publish((current) => ({ ...current, name: value })),
     setAppearance: (value) =>
       publish((current) => ({ ...current, icon: value.icon, color: value.color })),

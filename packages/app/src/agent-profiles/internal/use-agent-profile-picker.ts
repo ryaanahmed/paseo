@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import type { AgentRole } from "@getpaseo/protocol/agent-profile";
 import { useTranslation } from "react-i18next";
 import { mergeCreateAgentSelectionPreferences } from "@/create-agent-preferences/preferences";
 import { useFormPreferences } from "@/hooks/use-form-preferences";
@@ -35,6 +36,7 @@ export interface AgentProfilePickerRow {
   icon: string;
   color: string;
   name: string;
+  role?: AgentRole;
   /** "Claude Code · Opus 5 · Plan · Think hard" */
   summary: string;
 }
@@ -75,6 +77,9 @@ export function useAgentProfilePicker(
   const { updatePreferences } = useFormPreferences();
   const client = useSessionStore((state) => state.sessions[serverId ?? ""]?.client ?? null);
   const toast = useToast();
+  const supportsRoles = useSessionStore(
+    (state) => state.sessions[serverId ?? ""]?.serverInfo?.features?.agentRoles === true,
+  );
 
   const applicableProfiles = useMemo(() => {
     if (!isSupported || !profiles) {
@@ -101,6 +106,7 @@ export function useAgentProfilePicker(
         icon: profile.icon ?? "",
         color: profile.color ?? "",
         name: profile.name,
+        ...(profile.role ? { role: profile.role } : {}),
         summary: buildAgentProfileTags({ profile, entries, formatFeatureCount })
           .map((tag) => tag.label)
           .join(" · "),
@@ -137,6 +143,10 @@ export function useAgentProfilePicker(
       const resolved = materializeAgentProfile(profile);
 
       if (target.kind === "draft") {
+        if (profile.role && !supportsRoles) {
+          toast.error(t("settings.host.agentProfiles.rolesUnsupported"));
+          return;
+        }
         target.controls.applyProfile(resolved);
         return;
       }
@@ -157,7 +167,7 @@ export function useAgentProfilePicker(
           toast.error(toErrorMessage(error));
         });
     },
-    [applicableProfiles, client, persistSelection, target, toast],
+    [applicableProfiles, client, persistSelection, supportsRoles, t, target, toast],
   );
 
   return useMemo(
