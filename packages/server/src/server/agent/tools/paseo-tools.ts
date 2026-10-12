@@ -1,4 +1,6 @@
 import { AgentDirectory } from "../directory.js";
+import { ContextPolicySchema } from "@getpaseo/protocol/agent-context-policy";
+import { resolveAgentProfile } from "../create-agent/profile.js";
 import { stat } from "node:fs/promises";
 import { z } from "zod";
 import { ensureValidJson } from "../../json-utils.js";
@@ -1009,8 +1011,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       .min(1, "Title is required")
       .max(60, "Title must be 60 characters or fewer")
       .describe("Short descriptive title (<= 60 chars) summarizing the agent's focus."),
-    provider: ProviderModelInputSchema.describe(
-      "Required provider/model pair, for example codex/gpt-5.4.",
+    provider: ProviderModelInputSchema.optional().describe(
+      "Provider/model pair, for example codex/gpt-5.4. Optional when profileId supplies it.",
+    ),
+    profileId: z.string().min(1).optional().describe("Daemon agent profile ID from list_profiles."),
+    contextPolicy: ContextPolicySchema.optional().describe(
+      "Required per-agent context limits; defaults to the selected profile's policy.",
     ),
     labels: z.record(z.string(), z.string()).optional().describe("Labels to set on the agent"),
     settings: CreateAgentSettingsInputSchema.optional().describe(
@@ -1112,7 +1118,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   };
   const createAgentInputSchema = z
     .object(callerAgentId ? agentToAgentInputSchema : canonicalTopLevelInputSchema)
-    .passthrough();
+    .passthrough()
+    .refine((input) => Boolean(input.provider || input.profileId), {
+      message: "provider or profileId is required",
+      path: ["provider"],
+    });
   const agentToAgentCreateAgentArgsSchema = z.object(agentToAgentInputSchema).strict();
   const legacyAgentToAgentCreateAgentArgsSchema = z.object(legacyAgentToAgentInputSchema).strict();
   const canonicalTopLevelCreateAgentArgsSchema = z.object(canonicalTopLevelInputSchema).strict();
@@ -1424,12 +1434,28 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     },
   );
 
+  function resolveCreateProfile(parsedArgs: TopLevelCreateAgentArgs | AgentToAgentCreateAgentArgs) {
+    const explicitProvider = parsedArgs.provider
+      ? resolveRequiredProviderModel(parsedArgs.provider)
+      : undefined;
+    const selectedConfig = resolveAgentProfile(
+      {
+        ...explicitProvider,
+        profileId: parsedArgs.profileId,
+        contextPolicy: parsedArgs.contextPolicy,
+        featureValues: parsedArgs.settings?.features,
+      },
+      daemonConfigStore?.get().agentProfiles ?? [],
+    );
+    return selectedConfig;
+  }
+
   registerTool(
     "create_agent",
     {
       title: "Create agent",
       description:
-        "Create an agent. Agent-scoped creation defaults to your workspace and creates your subagent. Top-level creation without workspaceId creates a new local workspace. Requires provider/model (for example codex/gpt-5.4) and an initial prompt. Do not guess; call list_providers and list_models first if uncertain.",
+        "Create an agent. Agent-scoped creation defaults to your workspace and creates your subagent. Top-level creation without workspaceId creates a new local workspace. Requires profileId or provider/model (for example codex/gpt-5.4), and an initial prompt. Do not guess; call list_providers and list_models first if uncertain.",
       inputSchema: createAgentInputSchema,
       outputSchema: {
         agentId: z.string(),
@@ -1451,12 +1477,13 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       } else {
         notifyOnFinish = resolvedArgs.parsedArgs.notifyOnFinish ?? false;
       }
-      const selectedProvider = resolveRequiredProviderModel(parsedArgs.provider).provider;
-      const inheritedConfig = resolveInheritedProviderConfig(selectedProvider);
+      const selectedConfig = resolveCreateProfile(parsedArgs);
+      const inheritedConfig = resolveInheritedProviderConfig(selectedConfig.provider);
       const { snapshot, initialPromptStarted } = await createAgentCommand(
         {
           agentManager,
           agentStorage,
+          getAgentProfiles: () => daemonConfigStore?.get().agentProfiles ?? [],
           logger: childLogger,
           paseoHome: options.paseoHome,
           worktreesRoot: options.worktreesRoot,
@@ -1472,11 +1499,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           provider: parsedArgs.provider,
           title: parsedArgs.title,
           initialPrompt: parsedArgs.initialPrompt,
-          config: inheritedConfig,
+          config: { ...inheritedConfig, ...selectedConfig },
           cwd: resolvedArgs.cwd,
           workspaceId: resolvedArgs.workspaceId,
           thinking: parsedArgs.settings?.thinkingOptionId,
-          features: parsedArgs.settings?.features,
+          features: selectedConfig.featureValues,
           labels: parsedArgs.labels,
           mode: parsedArgs.settings?.modeId,
           promptFailure: "throw",
@@ -2914,8 +2941,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       description:
         "List agent profiles: named provider/model/mode bundles a human configured for specific " +
         "kinds of work. Read each profile's `notes` to pick the one that fits the task you're " +
-        "delegating, then copy its `provider`, `model`, `modeId`, `thinkingOptionId`, and " +
-        "`featureValues` into create_agent (there is no `profile` parameter). Returns an empty " +
+        "delegating, then pass its `id` as create_agent.profileId. The daemon resolves and " +
+        "persists the launch settings and context policy. Returns an empty " +
         "list if none are configured.",
       inputSchema: {},
       outputSchema: {

@@ -223,13 +223,15 @@ export interface PaseoWorkspaceActions {
 }
 
 type PaseoAgentSessionConfig = CreateAgentRequestMessage["config"];
-export type PaseoAgentProvider = PaseoAgentSessionConfig["provider"];
+export type PaseoAgentProvider = NonNullable<PaseoAgentSessionConfig["provider"]>;
 
 export type PaseoProviderFeatureValues = Record<string, unknown>;
 
 export interface PaseoAgentConfig {
-  /** Provider and model in `provider/model` format. */
-  provider: string;
+  /** Provider and model in `provider/model` format, or select a daemon profile. */
+  provider?: string;
+  profileId?: PaseoAgentSessionConfig["profileId"];
+  contextPolicy?: PaseoAgentSessionConfig["contextPolicy"];
   modeId?: PaseoAgentSessionConfig["modeId"];
   thinkingOptionId?: PaseoAgentSessionConfig["thinkingOptionId"];
   featureValues?: PaseoProviderFeatureValues;
@@ -529,7 +531,9 @@ function toDaemonAgentCreateOptions(
 ): CreateAgentRequestOptions {
   const { config: agentConfig, cwd, parent, title, prompt, ...requestOptions } = options;
   const { provider: providerModel, options: providerOptions, ...runtimeConfig } = agentConfig;
-  const { provider, model } = parseProviderModel(providerModel);
+  const { provider, model } = providerModel
+    ? parseProviderModel(providerModel)
+    : { provider: undefined, model: undefined };
   return {
     ...requestOptions,
     config: {

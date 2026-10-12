@@ -1,3 +1,7 @@
+import {
+  ContextPolicySchema,
+  ContextPolicyStatusSchema,
+} from "@getpaseo/protocol/agent-context-policy";
 import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -12,6 +16,9 @@ import { AgentOwnerSchema, daemonExecutionKey, type DaemonAgentOwner } from "./a
 
 const SERIALIZABLE_CONFIG_SCHEMA = z
   .object({
+    contextPolicy: ContextPolicySchema.optional(),
+    contextStatus: ContextPolicyStatusSchema.optional(),
+    profileId: z.string().optional(),
     modeId: z.string().nullable().optional(),
     model: z.string().nullable().optional(),
     thinkingOptionId: z.string().nullable().optional(),
@@ -79,6 +86,9 @@ const STORED_AGENT_SCHEMA = z.object({
 
 export type SerializableAgentConfig = Pick<
   AgentSessionConfig,
+  | "contextPolicy"
+  | "contextStatus"
+  | "profileId"
   | "modeId"
   | "model"
   | "thinkingOptionId"

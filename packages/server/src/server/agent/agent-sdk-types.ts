@@ -1,3 +1,4 @@
+import type { ContextPolicy, ContextPolicyStatus } from "@getpaseo/protocol/agent-context-policy";
 import type {
   AgentFeature,
   AgentFeatureSelect,
@@ -585,6 +586,9 @@ export interface ImportedProviderSession {
 }
 
 export interface AgentSessionConfig {
+  contextPolicy?: ContextPolicy;
+  contextStatus?: ContextPolicyStatus;
+  profileId?: string;
   provider: AgentProvider;
   cwd: string;
   /**
@@ -612,7 +616,14 @@ export interface AgentSessionConfig {
   internal?: boolean;
 }
 
+export interface CodexCustomProviderConfig {
+  model_provider: string;
+  model_providers: Record<string, Record<string, unknown>>;
+}
+
 export interface AgentLaunchContext {
+  /** Runtime-only scope routing; contains environment variable names, never capabilities. */
+  codexConfig?: CodexCustomProviderConfig;
   agentId?: string;
   env?: Record<string, string>;
   /**
@@ -744,6 +755,7 @@ export interface ResolveAgentDefaultModeInput {
 }
 
 export interface AgentClient {
+  getLaunchEnvironment?(): Record<string, string> | undefined;
   readonly provider: AgentProvider;
   readonly capabilities: AgentCapabilityFlags;
   createSession(

@@ -7,6 +7,7 @@ import {
   type AgentCreateSessionOptions,
   type AgentFeature,
   type AgentLaunchContext,
+  type CodexCustomProviderConfig,
   type AgentResumeSessionOptions,
   type AgentMode,
   type AgentModelDefinition,
@@ -3353,11 +3354,6 @@ function normalizeOpenAICompatibleBaseUrl(value: string): string | null {
     return withoutTrailingSlashes;
   }
   return `${withoutTrailingSlashes}/v1`;
-}
-
-interface CodexCustomProviderConfig {
-  model_provider: string;
-  model_providers: Record<string, Record<string, unknown>>;
 }
 
 function buildCodexCustomProviderConfig(
@@ -7159,6 +7155,10 @@ export class CodexAppServerAgentClient implements AgentClient {
     private readonly deps: CodexAppServerAgentDeps = {},
   ) {}
 
+  getLaunchEnvironment(): Record<string, string> | undefined {
+    return this.runtimeSettings?.env;
+  }
+
   private sessionDeps(launchEnv: Record<string, string> | undefined): CodexAppServerAgentDeps {
     return {
       ...this.deps,
@@ -7276,7 +7276,12 @@ export class CodexAppServerAgentClient implements AgentClient {
           agentId: launchContext?.agentId,
           environment,
         }),
-      { ...this.sessionDeps(launchContext?.env), environment },
+      {
+        ...this.sessionDeps(launchContext?.env),
+        environment,
+        customCodexConfig:
+          launchContext?.codexConfig ?? this.sessionDeps(launchContext?.env).customCodexConfig,
+      },
       options?.persistSession === false,
       goalsEnabled,
       autoReviewEnabled,
@@ -7313,7 +7318,12 @@ export class CodexAppServerAgentClient implements AgentClient {
           agentId: launchContext?.agentId,
           environment,
         }),
-      { ...this.sessionDeps(launchContext?.env), environment },
+      {
+        ...this.sessionDeps(launchContext?.env),
+        environment,
+        customCodexConfig:
+          launchContext?.codexConfig ?? this.sessionDeps(launchContext?.env).customCodexConfig,
+      },
       false,
       goalsEnabled,
       autoReviewEnabled,

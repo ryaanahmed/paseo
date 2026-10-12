@@ -1,3 +1,4 @@
+import { resolveAgentProfile } from "./profile.js";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -512,4 +513,93 @@ test("session create with an internal config skips provider session persistence"
   );
   expect(createAgent.mock.calls[1]?.[0]).not.toHaveProperty("internal");
   expect(createAgent.mock.calls[1]?.[2]).not.toHaveProperty("persistSession");
+});
+
+const contextPolicy = {
+  providerWindowTokens: 1000000,
+  clientWindowTokens: 1000000,
+  outputReserveTokens: 64000,
+  thresholdTokens: 512000,
+};
+
+test("profile creation resolves defaults and snapshots policy without shared references", () => {
+  const profile = {
+    id: "worker",
+    name: "Worker",
+    provider: "claude",
+    model: "sonnet",
+    modeId: "default",
+    thinkingOptionId: "high",
+    featureValues: { fast: false },
+    contextPolicy: { ...contextPolicy },
+  };
+  const resolved = resolveAgentProfile({ profileId: "worker", model: "opus" }, [profile]);
+  expect(resolved).toMatchObject({
+    provider: "claude",
+    model: "opus",
+    profileId: "worker",
+    modeId: "default",
+    thinkingOptionId: "high",
+    featureValues: { fast: false },
+    contextPolicy,
+  });
+  profile.contextPolicy.thresholdTokens = 100000;
+  profile.featureValues.fast = true;
+  expect(resolved.contextPolicy).toEqual(contextPolicy);
+  expect(resolved.featureValues).toEqual({ fast: false });
+  expect(
+    resolveAgentProfile({ profileId: "worker", featureValues: { tools: false } }, [profile])
+      .featureValues,
+  ).toEqual({ fast: true, tools: false });
+  expect(() => resolveAgentProfile({ profileId: "missing" }, [profile])).toThrow("not found");
+  expect(() => resolveAgentProfile({}, [profile])).toThrow("provider or profileId");
+});
+
+test("MCP creation uses daemon profile before provider settings validation", async () => {
+  const snapshot = { id: "profile-agent", provider: "claude", cwd: "/tmp" } as ManagedAgent;
+  const createAgent = vi.fn(async () => snapshot);
+  const providerStub = createProviderSnapshotManagerStub();
+  providerStub.resolveCreateConfig.mockResolvedValue({
+    modeId: "default",
+    featureValues: { fast: false },
+  });
+  const dependencies: Parameters<typeof createAgentCommand>[0] = {
+    agentManager: { createAgent } as unknown as Parameters<
+      typeof createAgentCommand
+    >[0]["agentManager"],
+    agentStorage: {} as Parameters<typeof createAgentCommand>[0]["agentStorage"],
+    logger,
+    providerSnapshotManager: providerStub.manager,
+    getAgentProfiles: () => [
+      {
+        id: "worker",
+        name: "Worker",
+        provider: "claude",
+        model: "sonnet",
+        modeId: "default",
+        contextPolicy,
+      },
+    ],
+  };
+  await createAgentCommand(dependencies, {
+    kind: "mcp",
+    title: "Worker",
+    config: { profileId: "worker" },
+    cwd: "/tmp",
+    workspaceId: "workspace",
+    notifyOnFinish: false,
+  });
+  expect(providerStub.resolveCreateConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ provider: "claude", requestedMode: "default" }),
+  );
+  expect(createAgent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      provider: "claude",
+      model: "sonnet",
+      profileId: "worker",
+      contextPolicy,
+    }),
+    undefined,
+    expect.objectContaining({ workspaceId: "workspace" }),
+  );
 });

@@ -1,5 +1,7 @@
 import type { AgentPromptSource } from "../agent-messages/index.js";
 import type { Logger } from "pino";
+import type { AgentProfile } from "@getpaseo/protocol/agent-profile";
+import { resolveAgentProfile } from "./profile.js";
 
 import type { TerminalManager } from "../../../terminal/terminal-manager.js";
 import type { CreatePaseoWorktreeInput } from "../../paseo-worktree-service.js";
@@ -37,6 +39,7 @@ export interface CreateAgentSessionWorktreeResult {
 }
 
 export interface CreateAgentCommandDependencies {
+  getAgentProfiles?: () => readonly AgentProfile[];
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   logger: Logger;
@@ -83,7 +86,7 @@ export interface CreateAgentFromSessionInput {
 
 export interface CreateAgentFromMcpInput {
   kind: "mcp";
-  provider: string;
+  provider?: string;
   title: string;
   initialPrompt?: string;
   config?: Partial<AgentSessionConfig>;
@@ -317,7 +320,21 @@ async function resolveMcpCreateAgent(
   dependencies: CreateAgentCommandDependencies,
   input: CreateAgentFromMcpInput,
 ): Promise<ResolvedCreateAgent> {
-  const resolvedProviderModel = resolveProviderModel(input.provider);
+  const explicitProvider = input.provider ? resolveProviderModel(input.provider) : undefined;
+  const profileConfig = resolveAgentProfile(
+    {
+      ...input.config,
+      ...(explicitProvider
+        ? {
+            provider: explicitProvider.provider,
+            model: explicitProvider.model ?? input.config?.model,
+          }
+        : {}),
+    },
+    dependencies.getAgentProfiles?.() ?? [],
+  );
+  input = { ...input, config: profileConfig };
+  const resolvedProviderModel = { provider: profileConfig.provider, model: profileConfig.model };
   const provider = resolvedProviderModel.provider;
   const parentAgent = input.callerAgentId
     ? requireParentAgent(dependencies.agentManager, input.callerAgentId)

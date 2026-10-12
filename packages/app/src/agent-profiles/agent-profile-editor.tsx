@@ -47,8 +47,17 @@ export function useAgentProfileEditor(serverId: string | null): AgentProfileEdit
     async (value: AgentProfileValue) => {
       const current = profiles ?? [];
       const editing = request?.mode === "edit" ? request.profile : undefined;
+      // The editor does not expose context limits, so preserve the host policy.
       const next: AgentProfile[] = editing
-        ? current.map((entry) => (entry.id === editing.id ? { id: entry.id, ...value } : entry))
+        ? current.map((entry) =>
+            entry.id === editing.id
+              ? {
+                  id: entry.id,
+                  ...value,
+                  ...(entry.contextPolicy ? { contextPolicy: entry.contextPolicy } : {}),
+                }
+              : entry,
+          )
         : [...current, { id: generateAgentProfileId(), ...value }];
       await saveProfiles(next);
       setRequest(null);

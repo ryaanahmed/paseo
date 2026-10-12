@@ -111,6 +111,7 @@ import type {
   ManagedAgent,
 } from "./agent/agent-manager.js";
 import { createAgentCommand } from "./agent/create-agent/create.js";
+import { resolveAgentProfile } from "./agent/create-agent/profile.js";
 import { resolveCreateAgentIntent, type CreateAgentIntent } from "./agent/create-agent/intent.js";
 import {
   archiveAgentCommand,
@@ -3200,8 +3201,10 @@ export class Session {
     // File-backed storage still needs an early delete fence before closeAgent().
     beginAgentDeleteIfSupported(this.agentStorage, agentId);
 
+    let closed = false;
     try {
       await closeAgentCommand({ agentManager: this.agentManager }, agentId);
+      closed = true;
     } catch (error) {
       this.sessionLogger.warn(
         { err: error, agentId },
@@ -3212,6 +3215,10 @@ export class Session {
     // Drain queued persistence from the just-closed agent before removing its
     // durable snapshot, otherwise an in-flight background write can recreate it.
     await this.agentManager.flush();
+
+    // Archive retains a resumable scope; permanent deletion releases it only
+    // after confirmed provider shutdown. A release failure keeps the record.
+    if (closed) await this.agentManager.releaseContext(agentId);
 
     try {
       await this.agentStorage.remove(agentId);
@@ -4262,8 +4269,11 @@ export class Session {
     agentId?: string,
     onAgentReady?: (agent: AgentSnapshotPayload) => Promise<void>,
   ): Promise<CreatedAgent> {
+    const config: AgentSessionConfig = {
+      ...resolveAgentProfile(msg.config, this.daemonConfigStore.get().agentProfiles ?? []),
+      cwd: msg.config.cwd,
+    };
     const {
-      config,
       worktreeName,
       initialPrompt,
       clientMessageId,
@@ -4315,7 +4325,8 @@ export class Session {
       });
       createdWorktreeForCleanup = createdWorktree;
       const resolvedIntent = await this.resolveSessionCreateAgentIntent({
-        request: msg,
+        request: { ...msg, config },
+        config,
         createdWorktree,
         workspacePromptTitle,
       });
@@ -4399,6 +4410,7 @@ export class Session {
 
   private async resolveSessionCreateAgentIntent(input: {
     request: CreateAgentRequestMessage;
+    config: AgentSessionConfig;
     createdWorktree: CreatePaseoWorktreeWorkflowResult | null;
     workspacePromptTitle: string | null;
   }): Promise<ResolvedSessionCreateAgentIntent> {
@@ -4410,7 +4422,7 @@ export class Session {
       throw new Error(`Caller agent ${request.callerAgentId} not found`);
     }
 
-    let config = request.config;
+    let config = input.config;
 
     const intent = await resolveCreateAgentIntent({
       explicitWorkspaceId: createdWorktree?.workspace.workspaceId ?? request.workspaceId,

@@ -31,6 +31,53 @@ agent catalog during startup, raise the limit in milliseconds:
 The limit applies independently to every provider refresh and covers availability plus the entire
 catalog probe. `PASEO_PROVIDER_REFRESH_TIMEOUT_MS` sets it when the config field is absent.
 
+## Context policy in launch profiles
+
+The personal 0.11.2 fork supports `daemon.agentProfiles[].contextPolicy`.
+Select a profile with `paseo run --profile <id>`, or pass `profileId` through
+SDK/MCP creation. Explicit launch settings override profile defaults. The daemon
+persists the resolved policy with the agent; editing a profile does not change
+existing conversations. Fresh successors copy the concrete policy and receive
+independent scopes. Their original profile identity is provenance, not a request
+to resolve that profile again.
+
+A policy supplies four explicit token counts: `providerWindowTokens`,
+`clientWindowTokens`, `outputReserveTokens`, and `thresholdTokens`. The threshold
+must fit within the smaller window after the output reserve. These values define
+a standing input-compaction policy. They do not limit total task spending or
+notification size. Establish model capacity before enrolling a profile; this fork
+does not infer it from a model name.
+
+The daemon requires the local Gobstopper CLI and ready loopback proxy for scoped
+Claude/Codex launches. It applies headers after account routing, keeps capabilities
+in mode-0600 files under `$PASEO_HOME/runtime/context-scopes`, and refuses launch
+if provisioning, persistence, routing or policy validation fails. Provider account
+homes do not own these bindings. Unscoped launches clear inherited scope identity
+while retaining the proxy's existing default. Other clients' proxy defaults are
+unchanged.
+
+Snapshots expose `contextPolicy` and a nonsecret `contextStatus`. The latter is a
+scope-store reading taken before opening the session. `observedAt` is the time of
+that reading; `effectiveInputTokens` uses Gobstopper's last request/base state and
+is not proof of the next request's effective limit. Fresh scopes can show a
+128,000 base before receiving traffic even when their explicit standing threshold
+is larger.
+
+A scope survives close, daemon restart and resumable archive. Permanent agent
+deletion releases it only after confirmed provider shutdown. An ambiguous create
+leaves a private provisioning marker and blocks automatic retry: investigate the
+scope store before removing that marker, because scope creation is not idempotent.
+Do not close a scope while any provider process might still use it.
+
+The daemon advertises support for profile/policy-bearing creation.
+Do not edit scoped profiles with the stock desktop/mobile profile editor: saving
+even a name change discards `contextPolicy`. The fork editor preserves it.
+
+The fork SDK refuses older daemons. Stock desktop/mobile builds do not send the
+new profile identity and cannot launch scoped profiles; use the fork CLI/MCP/SDK
+until the corresponding app change is shipped. Existing ordinary app operations
+remain wire-compatible.
+
 ## Provider options
 
 Set provider defaults in `agents.providers.<id>.options`. At agent creation, use

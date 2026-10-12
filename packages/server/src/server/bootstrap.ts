@@ -1,3 +1,4 @@
+import { GobstopperContextManager } from "./agent/gobstopper-context.js";
 import type { PluginRegistries } from "@getpaseo/protocol/plugin-registry";
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
@@ -947,6 +948,9 @@ export async function createPaseoDaemon(
   });
   const initialAgentManagerState = providerSnapshotManager.getAgentManagerProviderState();
   const agentManager = new AgentManager({
+    contextManager: new GobstopperContextManager({
+      stateDirectory: path.join(config.paseoHome, "runtime", "context-scopes"),
+    }),
     pluginLifecycle: pluginRuntime,
     clients: initialAgentManagerState.clients,
     providerDefinitions: initialAgentManagerState.providerDefinitions,
@@ -1191,6 +1195,7 @@ export async function createPaseoDaemon(
   };
 
   const createAgentCommandDependencies: CreateAgentCommandDependencies = {
+    getAgentProfiles: () => daemonConfigStore.get().agentProfiles ?? [],
     agentManager,
     agentStorage,
     logger,

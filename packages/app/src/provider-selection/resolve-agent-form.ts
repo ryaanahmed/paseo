@@ -12,6 +12,7 @@ import {
 import { findModelByReference } from "./model-catalog";
 
 export interface FormInitialValues {
+  profileId?: string;
   provider?: AgentProvider;
   modeId?: string | null;
   model?: string | null;

@@ -445,7 +445,7 @@ type AgentConfigOverrides = Partial<Omit<AgentSessionConfig, "provider" | "cwd">
 export interface CreateAgentRequestOptions extends AgentConfigOverrides {
   agentId?: string;
   onEvent?: (snapshot: CreationSnapshot) => void;
-  config?: AgentSessionConfig;
+  config?: CreateAgentRequestMessage["config"];
   provider?: AgentProvider;
   cwd?: string;
   env?: CreateAgentRequestMessage["env"];
@@ -2883,11 +2883,24 @@ export class DaemonClient {
     return this.lastServerInfoMessage?.features?.backgroundWorkspaces === true;
   }
 
+  private resolveCreateAgentConfig(
+    options: CreateAgentRequestOptions,
+  ): CreateAgentRequestMessage["config"] {
+    const config = resolveAgentConfig(options);
+    if (
+      (config.profileId || config.contextPolicy) &&
+      this.lastServerInfoMessage?.features?.agentContextPolicy !== true
+    ) {
+      throw new Error("Update the host to create agents with profiles or context policy.");
+    }
+    return config;
+  }
+
   async createAgent(options: CreateAgentRequestOptions): Promise<AgentSnapshotPayload> {
     if (options.background !== undefined) this.requireBackgroundWorkspaces();
     const result = await this.creations.createAgent({
       ...options,
-      config: resolveAgentConfig(options),
+      config: this.resolveCreateAgentConfig(options),
     });
     if (result.error || !result.agent) throw new Error(result.error ?? "Agent creation failed");
     return result.agent;
@@ -4599,7 +4612,7 @@ export class DaemonClient {
       ...input,
       requestId: resolvedRequestId,
       ...(input.agent
-        ? { agent: { ...input.agent, config: resolveAgentConfig(input.agent) } }
+        ? { agent: { ...input.agent, config: this.resolveCreateAgentConfig(input.agent) } }
         : {}),
     });
     return {
@@ -6963,7 +6976,9 @@ export class DaemonClient {
   }
 }
 
-function resolveAgentConfig(options: CreateAgentRequestOptions): AgentSessionConfig {
+function resolveAgentConfig(
+  options: CreateAgentRequestOptions,
+): CreateAgentRequestMessage["config"] {
   const {
     config,
     provider,
@@ -6997,8 +7012,8 @@ function resolveAgentConfig(options: CreateAgentRequestOptions): AgentSessionCon
 
   const merged = config ? { ...baseConfig, ...config } : baseConfig;
 
-  if (!merged.provider || !merged.cwd) {
-    throw new Error("createAgent requires provider and cwd");
+  if ((!merged.provider && !merged.profileId) || !merged.cwd) {
+    throw new Error("createAgent requires provider or profileId, and cwd");
   }
 
   return {

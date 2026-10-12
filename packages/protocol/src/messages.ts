@@ -1,4 +1,5 @@
 import { AgentMessageSchema } from "./agent-message.js";
+import { ContextPolicySchema, ContextPolicyStatusSchema } from "./agent-context-policy.js";
 import { PluginRegistryIdentitySchema } from "./plugin-registry.js";
 import { AgentProfileSchema, AgentSkillSelectionSchema } from "./agent-profile.js";
 export {
@@ -437,7 +438,9 @@ const ToolPolicySchema = z
   .strict();
 
 const AgentSessionConfigSchema = z.object({
-  provider: AgentProviderSchema,
+  contextPolicy: ContextPolicySchema.optional(),
+  profileId: z.string().optional(),
+  provider: AgentProviderSchema.optional(),
   cwd: z.string(),
   modeId: z.string().optional(),
   model: z.string().optional(),
@@ -811,6 +814,9 @@ const AgentActiveTurnPayloadSchema = z.object({
 });
 
 export const AgentSnapshotPayloadSchema = z.object({
+  contextStatus: ContextPolicyStatusSchema.optional(),
+  contextPolicy: ContextPolicySchema.optional(),
+  profileId: z.string().optional(),
   id: z.string(),
   provider: AgentProviderSchema,
   cwd: z.string(),
@@ -3723,6 +3729,7 @@ export const ServerInfoStatusPayloadSchema = z
         selectiveAgentTimeline: z.boolean().optional(),
         explicitEventSubscriptions: z.boolean().optional(),
         ownedSubscriptions: z.boolean().optional(),
+        agentContextPolicy: z.boolean().optional(),
         // COMPAT(canonicalSubmittedPrompts): added in v0.2.6, remove gate after 2027-01-30.
         canonicalSubmittedPrompts: z.boolean().optional(),
         agentMessageProvenance: z.boolean().optional(),

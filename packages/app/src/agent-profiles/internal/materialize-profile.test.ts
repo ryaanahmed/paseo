@@ -117,3 +117,18 @@ describe("reconcileMaterializedProfileMode", () => {
     ).toMatchObject({ modeId: "plan" });
   });
 });
+
+it("keeps context-policy profile identity for creation but excludes it from live config edits", () => {
+  const resolved = materializeAgentProfile(
+    profile({
+      contextPolicy: {
+        providerWindowTokens: 1000000,
+        clientWindowTokens: 1000000,
+        outputReserveTokens: 64000,
+        thresholdTokens: 512000,
+      },
+    }),
+  );
+  expect(resolved.profileId).toBe("ui-work");
+  expect(toAgentConfigApply(resolved)).not.toHaveProperty("profileId");
+});

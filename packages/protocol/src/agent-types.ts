@@ -1,4 +1,5 @@
 import type { AgentMessage } from "./agent-message.js";
+import type { ContextPolicy, ContextPolicyStatus } from "./agent-context-policy.js";
 import type { AgentAttachment } from "./messages.js";
 
 export type AgentProvider = string;
@@ -513,6 +514,9 @@ export interface ToolPolicy {
 }
 
 export interface AgentSessionConfig {
+  contextPolicy?: ContextPolicy;
+  contextStatus?: ContextPolicyStatus;
+  profileId?: string;
   provider: AgentProvider;
   cwd: string;
   /**

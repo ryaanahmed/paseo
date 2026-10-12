@@ -44,6 +44,7 @@ export function addRunOptions(cmd: Command): Command {
         "--model <model>",
         "Model to use (e.g., claude-sonnet-4-20250514, claude-3-5-haiku-20241022)",
       )
+      .option("--profile <id>", "Daemon agent profile ID; explicit settings override its defaults")
       .option("--thinking <id>", "Thinking option ID to use for this run")
       .option("--mode <mode>", "Provider-specific mode (e.g., plan, default, bypass)")
       .option("--new-workspace <local|worktree>", "Create a separate local or worktree workspace")
@@ -120,6 +121,7 @@ export interface AgentRunOptions extends CommandOptions {
   title?: string;
   name?: string;
   provider?: string;
+  profile?: string;
   model?: string;
   thinking?: string;
   mode?: string;
@@ -589,6 +591,21 @@ async function resolveRunWorkspace(
   return { id: result.workspace.id, cwd: result.workspace.workspaceDirectory ?? cwd };
 }
 
+function resolveRunProviderProfile(options: AgentRunOptions) {
+  const profileId = options.profile?.trim();
+  if (options.profile !== undefined && !profileId) {
+    throw { code: "INVALID_PROFILE", message: "--profile cannot be empty" } satisfies CommandError;
+  }
+  const resolvedProviderModel =
+    profileId && !options.provider
+      ? { provider: undefined, model: options.model?.trim() }
+      : resolveProviderAndModel(options);
+  if (options.model !== undefined && !resolvedProviderModel.model) {
+    throw { code: "INVALID_MODEL", message: "--model cannot be empty" } satisfies CommandError;
+  }
+  return { ...resolvedProviderModel, profileId };
+}
+
 export async function runRunCommand(
   prompt: string,
   options: AgentRunOptions,
@@ -599,7 +616,7 @@ export async function runRunCommand(
   validateRunOptions(prompt, options, outputSchema);
   const waitTimeoutMs = parseWaitTimeoutOption(options.waitTimeout);
 
-  const resolvedProviderModel = resolveProviderAndModel(options);
+  const { profileId, ...resolvedProviderModel } = resolveRunProviderProfile(options);
   const resolvedTitle = options.title ?? options.name;
 
   const client = await connectToDaemon({ target: options.daemonTarget });
@@ -636,6 +653,7 @@ export async function runRunCommand(
         if (!structuredAgent) {
           structuredAgent = await client.createAgent({
             provider: resolvedProviderModel.provider,
+            profileId,
             cwd: runCwd,
             workspaceId,
             callerAgentId,
@@ -707,6 +725,7 @@ export async function runRunCommand(
     // Create the agent
     const agent = await client.createAgent({
       provider: resolvedProviderModel.provider,
+      profileId,
       cwd: runCwd,
       workspaceId,
       callerAgentId,
