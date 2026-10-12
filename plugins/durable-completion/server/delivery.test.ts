@@ -73,8 +73,10 @@ it.each(["completed", "failed", "canceled"])(
     const text = notification(record);
     expect(Buffer.byteLength(text)).toBeLessThan(1200);
     expect(text).not.toContain("PRIVATE");
+    expect(text).not.toContain("<paseo-system>");
     expect(test.send).toHaveBeenCalledWith(text, {
       messageId: record.deliveryId,
+      sourceAgentId: request.agentId,
       activeTurnBehavior: "reject",
     });
     const restarted = new CompletionStore(test.directory);
@@ -152,6 +154,7 @@ it("replays a crash-gap delivery with the same key and immutable body", async ()
   await test.tick(restarted);
   expect(test.send).toHaveBeenCalledWith(original, {
     messageId: restarted.get(request.id)!.deliveryId,
+    sourceAgentId: request.agentId,
     activeTurnBehavior: "reject",
   });
   expect(test.accepted.size).toBe(1);

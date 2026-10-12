@@ -13,7 +13,7 @@ export function notification(record: Watch): string {
     clientMessageId: record.clientMessageId,
     ...record.outcome,
   };
-  return `<paseo-system>\nExecution outcome; apply your workspace's acceptance rules. Query the exact execution for evidence.\n${JSON.stringify(metadata)}\n</paseo-system>`;
+  return `Execution outcome; apply your workspace's acceptance rules. Query the exact execution for evidence.\n${JSON.stringify(metadata)}`;
 }
 
 export async function deliverPending(
@@ -82,6 +82,7 @@ async function deliverOne(
     // reject refuses concurrent work and never resurrects an archived recipient.
     await recipient.send(notification(delivering), {
       messageId: delivering.deliveryId,
+      sourceAgentId: delivering.agentId,
       activeTurnBehavior: "reject",
     });
   } catch (error) {
