@@ -1,4 +1,6 @@
 import { GobstopperContextManager } from "./gobstopper-context.js";
+import { AgentExecutionStore } from "./agent-execution-store.js";
+import type { AgentExecution } from "@getpaseo/protocol/agent-execution";
 import { expect, test, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -1642,6 +1644,332 @@ function fakeCodexEmitting(args: FakeCodexEmitterArgs): AgentClient {
 }
 
 const logger = createTestLogger();
+
+test.each(["completed", "failed", "canceled"] as const)(
+  "durable execution records early %s before its public event and survives restart",
+  async (status) => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-execution-manager-"));
+    const executionStore = new AgentExecutionStore(join(directory, "executions"));
+    const agentId = randomUUID();
+    const observed: Promise<AgentExecution | null>[] = [];
+    let manager: AgentManager;
+    class EarlySession extends TestAgentSession {
+      override async startTurn(): Promise<{ turnId: string }> {
+        expect(
+          await manager.getExecution(agentId, {
+            kind: "submission",
+            clientMessageId: "task",
+          }),
+        ).toMatchObject({ status: "starting", turnId: null });
+        let terminal: AgentStreamEvent;
+        if (status === "failed") {
+          terminal = {
+            type: "turn_failed",
+            provider: "codex",
+            turnId: "early",
+            error: "private failure prose",
+            code: "provider_error",
+          };
+        } else if (status === "canceled") {
+          terminal = {
+            type: "turn_canceled",
+            provider: "codex",
+            turnId: "early",
+            reason: "stopped",
+          };
+        } else {
+          terminal = { type: "turn_completed", provider: "codex", turnId: "early" };
+        }
+        this.pushEvent(terminal);
+        return { turnId: "early" };
+      }
+    }
+    const session = new EarlySession({ provider: "codex", cwd: directory });
+    const client = new (class extends TestAgentClient {
+      override async createSession() {
+        return session;
+      }
+    })();
+    manager = new AgentManager({
+      executionStore,
+      clients: { codex: client },
+      logger,
+      idFactory: () => agentId,
+    });
+    const agent = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+      workspaceId: undefined,
+    });
+    manager.subscribe((event) => {
+      if (event.type === "agent_stream" && event.event.type === `turn_${status}`) {
+        observed.push(
+          manager.getExecution(agent.id, { kind: "submission", clientMessageId: "task" }),
+        );
+      }
+    });
+    try {
+      await drainAsyncGenerator(
+        manager.streamAgent(agent.id, "private task", { clientMessageId: "task" }),
+      );
+      const outcomes = await Promise.all(observed);
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]).toMatchObject({ status, turnId: "early", providerSessionId: session.id });
+      const restarted = new AgentExecutionStore(join(directory, "executions"));
+      expect(
+        await restarted.get(agent.id, { kind: "submission", clientMessageId: "task" }),
+      ).toEqual(outcomes[0]);
+    } finally {
+      await manager.closeAgent(agent.id);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("durable execution keeps rejected provider acceptance unknown", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-execution-rejection-"));
+  class RejectedSession extends TestAgentSession {
+    override async startTurn(): Promise<{ turnId: string }> {
+      throw new Error("acknowledgement lost after provider may have accepted");
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig) {
+      return new RejectedSession(config);
+    }
+  })();
+  const manager = new AgentManager({
+    executionStore: new AgentExecutionStore(join(directory, "executions")),
+    clients: { codex: client },
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await expect(
+      drainAsyncGenerator(manager.streamAgent(agent.id, "task", { clientMessageId: "uncertain" })),
+    ).rejects.toThrow("acknowledgement lost");
+    expect(
+      await manager.getExecution(agent.id, { kind: "submission", clientMessageId: "uncertain" }),
+    ).toMatchObject({
+      status: "unknown",
+      errorCode: "provider_acceptance_unknown",
+      turnId: null,
+    });
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("durable execution isolates predecessor events and leaves steers without a primary mapping", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-execution-successor-"));
+  const session = new SteeringTestSession({ provider: "codex", cwd: directory });
+  const client = new (class extends TestAgentClient {
+    override async createSession() {
+      return session;
+    }
+  })();
+  const manager = new AgentManager({
+    executionStore: new AgentExecutionStore(join(directory, "executions")),
+    clients: { codex: client },
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const first = manager.streamAgent(agent.id, "first", { clientMessageId: "first" });
+    await first.next();
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "active-turn-1" });
+    await drainAsyncGenerator(first);
+    const second = manager.streamAgent(agent.id, "second", { clientMessageId: "second" });
+    await second.next();
+    await manager.steerAgentRun(agent.id, "additional instruction", { clientMessageId: "steer" });
+    expect(
+      await manager.getExecution(agent.id, { kind: "submission", clientMessageId: "steer" }),
+    ).toBeNull();
+    session.pushEvent({
+      type: "turn_failed",
+      provider: "codex",
+      turnId: "active-turn-1",
+      error: "late predecessor",
+    });
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "active-turn-2" });
+    await drainAsyncGenerator(second);
+    const firstOutcome = await manager.getExecution(agent.id, {
+      kind: "submission",
+      clientMessageId: "first",
+    });
+    const secondOutcome = await manager.getExecution(agent.id, {
+      kind: "submission",
+      clientMessageId: "second",
+    });
+    expect(firstOutcome?.status).toBe("completed");
+    expect(secondOutcome?.status).toBe("completed");
+    expect(firstOutcome?.executionId).not.toEqual(secondOutcome?.executionId);
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("durable execution treats closing without a provider outcome as unknown", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-execution-close-"));
+  const session = new SteeringTestSession({ provider: "codex", cwd: directory });
+  const client = new (class extends TestAgentClient {
+    override async createSession() {
+      return session;
+    }
+  })();
+  const manager = new AgentManager({
+    executionStore: new AgentExecutionStore(join(directory, "executions")),
+    clients: { codex: client },
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const run = manager.streamAgent(agent.id, "task", { clientMessageId: "task" });
+    await run.next();
+    await manager.closeAgent(agent.id);
+    await drainAsyncGenerator(run);
+    expect(
+      await manager.getExecution(agent.id, { kind: "submission", clientMessageId: "task" }),
+    ).toMatchObject({
+      status: "unknown",
+      errorCode: "session_closed_without_outcome",
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("durable execution distinguishes a reused provider turn ID after session reopen", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-execution-reopen-"));
+  const manager = new AgentManager({
+    executionStore: new AgentExecutionStore(join(directory, "executions")),
+    clients: { codex: new TestAgentClient() },
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await drainAsyncGenerator(manager.streamAgent(agent.id, "first", { clientMessageId: "first" }));
+    await manager.reloadAgentSession(agent.id);
+    await drainAsyncGenerator(
+      manager.streamAgent(agent.id, "second", { clientMessageId: "second" }),
+    );
+    const first = await manager.getExecution(agent.id, {
+      kind: "submission",
+      clientMessageId: "first",
+    });
+    const second = await manager.getExecution(agent.id, {
+      kind: "submission",
+      clientMessageId: "second",
+    });
+    expect(first).toMatchObject({ status: "completed", turnId: "turn-1" });
+    expect(second).toMatchObject({ status: "completed", turnId: "turn-1" });
+    expect(first?.providerSessionId).not.toEqual(second?.providerSessionId);
+    expect(first?.executionId).not.toEqual(second?.executionId);
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("durable execution survives the foreground observer closing before completion", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-execution-observer-"));
+  const session = new SteeringTestSession({ provider: "codex", cwd: directory });
+  const client = new (class extends TestAgentClient {
+    override async createSession() {
+      return session;
+    }
+  })();
+  const manager = new AgentManager({
+    executionStore: new AgentExecutionStore(join(directory, "executions")),
+    clients: { codex: client },
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const observed = deferred<void>();
+    manager.subscribe((event) => {
+      if (event.type === "agent_stream" && event.event.type === "turn_completed") {
+        observed.resolve();
+      }
+    });
+    const run = manager.streamAgent(agent.id, "task", { clientMessageId: "task" });
+    await run.next();
+    await run.return(undefined);
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "active-turn-1" });
+    await observed.promise;
+    expect(
+      await manager.getExecution(agent.id, { kind: "submission", clientMessageId: "task" }),
+    ).toMatchObject({
+      status: "completed",
+      turnId: "active-turn-1",
+    });
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("durable execution withholds terminal publication when persistence fails", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-execution-write-failure-"));
+  const attempted = deferred<void>();
+  class FailingStore extends AgentExecutionStore {
+    failCompletion = true;
+    override async update(...args: Parameters<AgentExecutionStore["update"]>): Promise<void> {
+      if (this.failCompletion && args[2].status === "completed") {
+        attempted.resolve();
+        throw new Error("execution disk write failed");
+      }
+      await super.update(...args);
+    }
+  }
+  const store = new FailingStore(join(directory, "executions"));
+  const session = new SteeringTestSession({ provider: "codex", cwd: directory });
+  const client = new (class extends TestAgentClient {
+    override async createSession() {
+      return session;
+    }
+  })();
+  const manager = new AgentManager({ executionStore: store, clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+    workspaceId: undefined,
+  });
+  const terminalEvents: AgentStreamEvent[] = [];
+  manager.subscribe((event) => {
+    if (event.type === "agent_stream" && event.event.type === "turn_completed") {
+      terminalEvents.push(event.event);
+    }
+  });
+  try {
+    const run = manager.streamAgent(agent.id, "task", { clientMessageId: "task" });
+    await run.next();
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "active-turn-1" });
+    await attempted.promise;
+    expect(
+      await manager.getExecution(agent.id, { kind: "submission", clientMessageId: "task" }),
+    ).toMatchObject({ status: "running" });
+    expect(terminalEvents).toHaveLength(0);
+    store.failCompletion = false;
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "active-turn-1" });
+    await drainAsyncGenerator(run);
+    expect(terminalEvents).toHaveLength(1);
+    expect(
+      await manager.getExecution(agent.id, { kind: "submission", clientMessageId: "task" }),
+    ).toMatchObject({ status: "completed" });
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("does not register a session that finishes starting after shutdown begins", async () => {
   const client = new HeldAgentCreationClient();

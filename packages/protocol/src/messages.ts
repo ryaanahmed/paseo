@@ -1,3 +1,4 @@
+import { AgentExecutionSchema, AgentExecutionQuerySchema } from "./agent-execution.js";
 import { ContextPolicySchema, ContextPolicyStatusSchema } from "./agent-context-policy.js";
 import { PluginRegistryIdentitySchema } from "./plugin-registry.js";
 import { AgentProfileSchema, AgentSkillSelectionSchema } from "./agent-profile.js";
@@ -1200,7 +1201,7 @@ const ImageAttachmentSchema = z.object({
   mimeType: z.string(), // e.g., "image/jpeg", "image/png"
 });
 
-export const ActiveTurnBehaviorSchema = z.enum(["interrupt", "steer"]);
+export const ActiveTurnBehaviorSchema = z.enum(["interrupt", "steer", "reject"]);
 export type ActiveTurnBehavior = z.infer<typeof ActiveTurnBehaviorSchema>;
 
 export const SendAgentMessageSchema = z.object({
@@ -1345,6 +1346,13 @@ export const FetchRecentProviderSessionsRequestMessageSchema = z.object({
   since: z.string().optional(),
   limit: z.number().int().positive().max(200).optional(),
   query: z.string().optional(),
+});
+
+export const AgentExecutionGetRequestSchema = z.object({
+  type: z.literal("agent.execution.get.request"),
+  requestId: z.string(),
+  agentId: z.string().min(1),
+  query: AgentExecutionQuerySchema,
 });
 
 export const FetchAgentRequestMessageSchema = z.object({
@@ -3193,6 +3201,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   FetchWorkspacesRequestMessageSchema,
   ProjectListRequestMessageSchema,
   FetchAgentRequestMessageSchema,
+  AgentExecutionGetRequestSchema,
   DeleteAgentRequestMessageSchema,
   ArchiveAgentRequestMessageSchema,
   CloseItemsRequestMessageSchema,
@@ -3700,6 +3709,7 @@ export const ServerInfoStatusPayloadSchema = z
         explicitEventSubscriptions: z.boolean().optional(),
         ownedSubscriptions: z.boolean().optional(),
         agentContextPolicy: z.boolean().optional(),
+        agentExecutionOutcomes: z.boolean().optional(),
         // COMPAT(canonicalSubmittedPrompts): added in v0.2.6, remove gate after 2027-01-30.
         canonicalSubmittedPrompts: z.boolean().optional(),
         // COMPAT(agentTurnIdentity): accept peers that observed pre-release v0.2.6 through 2027-01-31.
@@ -4565,6 +4575,15 @@ export const ArchiveWorkspaceResponseMessageSchema = z.object({
     requestId: z.string(),
     workspaceId: z.string(),
     archivedAt: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const AgentExecutionGetResponseSchema = z.object({
+  type: z.literal("agent.execution.get.response"),
+  payload: z.object({
+    requestId: z.string(),
+    execution: AgentExecutionSchema.nullable(),
     error: z.string().nullable(),
   }),
 });
@@ -6894,6 +6913,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   LegacyOpenInEditorResponseMessageSchema,
   ArchiveWorkspaceResponseMessageSchema,
   FetchAgentResponseMessageSchema,
+  AgentExecutionGetResponseSchema,
   FetchAgentTimelineResponseMessageSchema,
   AgentTimelineReplacementMessageSchema,
   AgentTimelineSearchResponseMessageSchema,

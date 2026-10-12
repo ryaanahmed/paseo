@@ -30,7 +30,7 @@ console.log(result.status, result.lastMessage);
 
 | Status       | Meaning                                                           |
 | ------------ | ----------------------------------------------------------------- |
-| `idle`       | The turn completed and the agent can accept another prompt.       |
+| `idle`       | The agent is idle; this does not identify an exact turn outcome.  |
 | `permission` | The agent needs a person to answer a permission request in Paseo. |
 | `error`      | The provider ended the turn with an error.                        |
 | `timeout`    | The wait deadline elapsed; the agent may still be running.        |
@@ -58,7 +58,30 @@ if (first.status === "idle") {
 }
 ```
 
-Use `send()` for fire-and-forget delivery. Use `run()` when the caller needs the outcome of that turn.
+Use `send()` to submit without waiting for idle. Use `run()` to submit and wait for the agent to become idle or need attention. For exact execution settlement, retain the message ID and query its execution record.
+
+## Query durable execution outcomes
+
+On hosts advertising `agentExecutionOutcomes`, read one execution without fetching conversation history:
+
+```ts
+const messageId = crypto.randomUUID();
+await reviewer.send("Review the current diff.", { messageId });
+
+// Keep the agent ID and message ID in your integration's durable record.
+const execution = await reviewer.execution({
+  kind: "submission",
+  clientMessageId: messageId,
+});
+```
+
+You can query the same record after reconnecting with `{ kind: "execution", executionId }`. The result contains IDs, provider, execution status and timestamps. It contains no transcript or final answer. Status is `starting`, `running`, `completed`, `failed`, `canceled` or `unknown`.
+
+`null` means there is no matching record. `unknown` means Paseo cannot prove settlement; neither result permits an automatic resubmission. A completed execution still requires your workspace's handoff validation and acceptance. This API reports execution evidence and grants no integration or release authority.
+
+The equivalent CLI query is `paseo agent execution <exact-agent-id> --client-message-id <id> --json`, or `--execution-id <id>`. It returns an array containing the metadata record, or an empty array when absent.
+
+For a notification that must not interrupt active work, send with `activeTurnBehavior: "reject"` and a stable `messageId`. The daemon refuses a busy or archived recipient; it does not steer, replace, queue or unarchive it. A lost acknowledgement remains an inspection problem. Query and non-interrupting send both require the host capability; an older host produces an explicit update error.
 
 ## Find agents by label
 

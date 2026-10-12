@@ -1,3 +1,4 @@
+import type { AgentExecution, AgentExecutionQuery } from "@getpaseo/protocol/agent-execution";
 import { legacyUsageIcon } from "./legacy-usage-icons.js";
 import { subscribeTimeline, type TimelineMessage } from "./timeline-subscription/index.js";
 import { ProviderSnapshotUpdates } from "./provider-snapshots/index.js";
@@ -425,7 +426,7 @@ export interface DaemonClientTrace {
 
 export interface SendMessageOptions {
   messageId?: string;
-  /** What happens when the agent is mid-turn. The daemon interrupts the turn when omitted. */
+  /** Mid-turn behavior: reject refuses without interrupting; omitted means interrupt. */
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: SendAgentMessageRequest["attachments"];
@@ -2768,6 +2769,23 @@ export class DaemonClient {
     });
   }
 
+  async getAgentExecution(
+    agentId: string,
+    query: AgentExecutionQuery,
+  ): Promise<AgentExecution | null> {
+    if (this.lastServerInfoMessage?.features?.agentExecutionOutcomes !== true) {
+      throw new Error("Update the host to query durable agent execution outcomes.");
+    }
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.execution.get.response">({
+        message: { type: "agent.execution.get.request", agentId, query },
+      });
+    if (payload.error) {
+      throw new Error(payload.error);
+    }
+    return payload.execution;
+  }
+
   async fetchAgent(options: FetchAgentOptions): Promise<FetchAgentResult | null>;
   async fetchAgent(agentId: string, requestId?: string): Promise<FetchAgentResult | null>;
   async fetchAgent(
@@ -3460,6 +3478,12 @@ export class DaemonClient {
     text: string,
     options?: SendMessageOptions,
   ): Promise<void> {
+    if (
+      options?.activeTurnBehavior === "reject" &&
+      this.lastServerInfoMessage?.features?.agentExecutionOutcomes !== true
+    ) {
+      throw new Error("Update the host to send without interrupting an active turn.");
+    }
     const requestId = this.createRequestId();
     const messageId = options?.messageId ?? crypto.randomUUID();
     const message = SessionInboundMessageSchema.parse({

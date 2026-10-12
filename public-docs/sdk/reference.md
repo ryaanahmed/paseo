@@ -91,6 +91,7 @@ Creation options include `config`, `cwd`, `parent`, `title`, `prompt`, `env`, `o
 | `archivedAt`                   | `string \| null`                  | Archive timestamp; `null` while the agent is active.                                                    |
 | `current()`                    | `PaseoAgent \| null`              | Current detailed value observed by this handle; never fetches.                                          |
 | `refresh(requestId?)`          | `PaseoAgentRefetchResult \| null` | Fetches the current agent and project placement.                                                        |
+| `execution(query)`             | `AgentExecution \| null`          | Reads exact durable execution metadata by execution ID or client message ID; requires host support.     |
 | `send(text, options?)`         | `Promise<void>`                   | Resolves when the daemon accepts the prompt.                                                            |
 | `respondToPermission(options)` | `Promise<void>`                   | Answers a pending permission by `requestId` with an allow or deny `response`.                           |
 | `run(text, options?)`          | `PaseoAgentRunResult`             | Sends a prompt and waits for that turn. `timeoutMs` controls the wait; it defaults to 10 minutes.       |

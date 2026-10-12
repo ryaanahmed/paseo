@@ -2715,7 +2715,7 @@ export class Session {
     }
   }
 
-  private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+  private dispatchAgentReadMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "fetch_agents_request":
         return this.handleFetchAgents(msg);
@@ -2723,8 +2723,21 @@ export class Session {
         return this.handleFetchAgentHistory(msg);
       case "fetch_recent_provider_sessions_request":
         return this.handleFetchRecentProviderSessions(msg);
+      case "agent.execution.get.request":
+        return this.handleGetAgentExecution(msg);
       case "fetch_agent_request":
         return this.handleFetchAgent(msg.agentId, msg.requestId);
+      default:
+        return undefined;
+    }
+  }
+
+  private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    return this.dispatchAgentReadMessage(msg) ?? this.dispatchAgentControlMessage(msg);
+  }
+
+  private dispatchAgentControlMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    switch (msg.type) {
       case "delete_agent_request":
         return this.handleDeleteAgentRequest(msg.agentId, msg.requestId);
       case "archive_agent_request":
@@ -7587,6 +7600,17 @@ export class Session {
     }
   }
 
+  private async handleGetAgentExecution(
+    msg: Extract<SessionInboundMessage, { type: "agent.execution.get.request" }>,
+  ): Promise<void> {
+    // Use the exact agent and submission identity; lookup must not scan transcripts.
+    const execution = await this.agentManager.getExecution(msg.agentId, msg.query);
+    this.emit({
+      type: "agent.execution.get.response",
+      payload: { requestId: msg.requestId, execution, error: null },
+    });
+  }
+
   private async handleFetchAgent(agentIdOrIdentifier: string, requestId: string): Promise<void> {
     // An unknown agent is a null agent, not an error. Errors are for empty or ambiguous identifiers.
     const resolved = await this.resolveAgentIdentifier(agentIdOrIdentifier);
@@ -8119,7 +8143,19 @@ export class Session {
           messageId: msg.messageId,
           request: { prompt, activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt" },
           prepare: async () => {
+            // Refuse archived recipients before opening a provider session.
+            if (msg.activeTurnBehavior === "reject") {
+              const stored = await this.agentStorage.get(agentId);
+              if (stored?.archivedAt) throw new Error("agent_archived");
+            }
             await this.prepareAgentMessage(agentId, msg.text);
+            // Refuse before reserving the message ID so a later idle retry remains safe.
+            if (msg.activeTurnBehavior === "reject") {
+              const agent = this.agentManager.getAgent(agentId);
+              if (this.agentManager.hasInFlightRun(agentId) || agent?.pendingPermissions.size) {
+                throw new Error("agent_busy");
+              }
+            }
           },
           send,
         });

@@ -1723,3 +1723,130 @@ test("agent create refuses policy-bearing requests on an older daemon", async ()
   expect(ws.sent).toHaveLength(sentCount);
   await client.close();
 });
+
+test.each(["starting", "running", "completed", "failed", "canceled", "unknown"] as const)(
+  "agent execution returns exact %s metadata without fetching history",
+  async (status) => {
+    const { client, ws } = await connectClient({ agentExecutionOutcomes: true });
+    const sentCount = ws.sent.length;
+    const query = { kind: "submission", clientMessageId: "packet-2" } as const;
+    const result = client.agents.ref("agent_sdk").execution(query);
+    const request = parseSentSessionMessage(ws.sent.at(-1));
+    expect(request).toMatchObject({
+      type: "agent.execution.get.request",
+      agentId: "agent_sdk",
+      query,
+    });
+    const execution = {
+      agentId: "agent_sdk",
+      executionId: "execution-2",
+      provider: "codex",
+      providerSessionId: "session-1",
+      turnId: "turn-2",
+      clientMessageId: "packet-2",
+      status,
+      startedAt: "2026-10-12T12:00:00.000Z",
+      updatedAt: "2026-10-12T12:01:00.000Z",
+    };
+    ws.message(
+      sessionMessage({
+        type: "agent.execution.get.response",
+        payload: { requestId: request.requestId, execution, error: null },
+      }),
+    );
+    await expect(result).resolves.toEqual(execution);
+    expect(ws.sent).toHaveLength(sentCount + 1);
+    await client.close();
+  },
+);
+
+test("missing execution stays null instead of inferring settlement", async () => {
+  const { client, ws } = await connectClient({ agentExecutionOutcomes: true });
+  const query = { kind: "execution", executionId: "missing" } as const;
+  const result = client.agents.ref("agent_sdk").execution(query);
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({ query });
+  ws.message(
+    sessionMessage({
+      type: "agent.execution.get.response",
+      payload: { requestId: request.requestId, execution: null, error: null },
+    }),
+  );
+  await expect(result).resolves.toBeNull();
+  await client.close();
+});
+
+test("agent execution requires host capability and sends no fallback requests", async () => {
+  const { client, ws } = await connectClient();
+  const sentCount = ws.sent.length;
+  await expect(
+    client.agents.ref("agent_sdk").execution({
+      kind: "submission",
+      clientMessageId: "packet-2",
+    }),
+  ).rejects.toThrow("Update the host");
+  expect(ws.sent).toHaveLength(sentCount);
+  await client.close();
+});
+
+test("agent execution reports query failure instead of a missing record", async () => {
+  const { client, ws } = await connectClient({ agentExecutionOutcomes: true });
+  const result = client.agents.ref("agent_sdk").execution({
+    kind: "execution",
+    executionId: "execution-2",
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  ws.message(
+    sessionMessage({
+      type: "agent.execution.get.response",
+      payload: {
+        requestId: request.requestId,
+        execution: null,
+        error: "Execution store unavailable",
+      },
+    }),
+  );
+  await expect(result).rejects.toThrow("Execution store unavailable");
+  await client.close();
+});
+
+test("agent send reject requires host capability without fallback", async () => {
+  const { client, ws } = await connectClient();
+  const sentCount = ws.sent.length;
+  await expect(
+    client.agents.ref("agent_sdk").send("Completion available", {
+      messageId: "notification-1",
+      activeTurnBehavior: "reject",
+    }),
+  ).rejects.toThrow("Update the host");
+  expect(ws.sent).toHaveLength(sentCount);
+  await client.close();
+});
+
+test("agent send reject preserves exact message identity and active-turn behavior", async () => {
+  const { client, ws } = await connectClient({ agentExecutionOutcomes: true });
+  const result = client.agents.ref("agent_sdk").send("Completion available", {
+    messageId: "notification-1",
+    activeTurnBehavior: "reject",
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "send_agent_message_request",
+    agentId: "agent_sdk",
+    messageId: "notification-1",
+    activeTurnBehavior: "reject",
+  });
+  ws.message(
+    sessionMessage({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "agent_sdk",
+        accepted: false,
+        error: "agent_busy",
+      },
+    }),
+  );
+  await expect(result).rejects.toThrow("agent_busy");
+  await client.close();
+});

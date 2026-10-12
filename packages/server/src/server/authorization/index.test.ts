@@ -35,6 +35,17 @@ function outboundMessage(type: SessionOutboundMessage["type"]): SessionOutboundM
 }
 
 describe("SessionAuthorization", () => {
+  test("execution records use the existing agent read boundary", () => {
+    const reader = new SessionAuthorization(["workspace.read"]);
+    const daemonReader = new SessionAuthorization(["daemon.read"]);
+    const request = inboundMessage("agent.execution.get.request");
+    const response = outboundMessage("agent.execution.get.response");
+    expect(reader.allowsInbound(request)).toBe(true);
+    expect(reader.allowsOutbound(response)).toBe(true);
+    expect(daemonReader.allowsInbound(request)).toBe(false);
+    expect(daemonReader.allowsOutbound(response)).toBe(false);
+  });
+
   test("owner authority covers every session operation", () => {
     const authorization = new SessionAuthorization(OWNER_PERMISSIONS);
 
@@ -81,6 +92,7 @@ describe("SessionAuthorization", () => {
       "workspace.title.set.request",
       "fetch_agents_request",
       "fetch_agent_request",
+      "agent.execution.get.request",
       "agent.timeline.set_subscription.request",
       "send_agent_message_request",
       "workspace.recovery.inspect.request",
@@ -99,6 +111,7 @@ describe("SessionAuthorization", () => {
       "workspace.title.set.response",
       "fetch_agents_response",
       "fetch_agent_response",
+      "agent.execution.get.response",
       "agent.timeline.set_subscription.response",
       "send_agent_message_response",
       "workspace.recovery.inspect.response",
