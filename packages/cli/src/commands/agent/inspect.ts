@@ -47,6 +47,7 @@ interface AgentInspect {
   Worktree: string | null;
   ParentAgentId: string | null;
   ProfileId?: AgentSnapshotPayload["profileId"];
+  Role?: AgentSnapshotPayload["role"];
   ContextPolicy?: AgentSnapshotPayload["contextPolicy"];
   /** Scope-store reading at observedAt, not usage from an agent request. */
   ContextStatus?: AgentSnapshotPayload["contextStatus"];
@@ -156,6 +157,7 @@ function toInspectData(snapshot: AgentSnapshotPayload): AgentInspect {
     Worktree: snapshot.labels?.["paseo.worktree"] ?? null,
     ParentAgentId: snapshot.labels?.[PARENT_AGENT_ID_LABEL] ?? null,
     ...(snapshot.profileId ? { ProfileId: snapshot.profileId } : {}),
+    ...(snapshot.role ? { Role: snapshot.role } : {}),
     ...(snapshot.contextPolicy ? { ContextPolicy: snapshot.contextPolicy } : {}),
     ...(snapshot.contextStatus ? { ContextStatus: snapshot.contextStatus } : {}),
   };

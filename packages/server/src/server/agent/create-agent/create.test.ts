@@ -562,3 +562,18 @@ test("MCP creation uses daemon profile before provider settings validation", asy
     expect.objectContaining({ workspaceId: "workspace" }),
   );
 });
+
+test("profile roles are resolved once without name inference or parent inheritance", () => {
+  const profile = { id: "worker", name: "Ustad", provider: "codex", role: "shagird" as const };
+  const resolved = resolveAgentProfile({ profileId: "worker" }, [profile]);
+  expect(resolved.role).toBe("shagird");
+  expect(resolveAgentProfile({ profileId: "worker", role: "karigar" }, [profile]).role).toBe(
+    "karigar",
+  );
+  expect(
+    resolveAgentProfile({ provider: "codex", title: "Ustad" }, [profile]).role,
+  ).toBeUndefined();
+  const editedProfile = { ...profile, role: "mushir" as const };
+  expect(resolveAgentProfile({ profileId: "worker" }, [editedProfile]).role).toBe("mushir");
+  expect(resolved.role).toBe("shagird");
+});

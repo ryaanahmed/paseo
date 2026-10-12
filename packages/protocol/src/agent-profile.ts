@@ -1,6 +1,10 @@
 import { ContextPolicySchema } from "./agent-context-policy.js";
 import { z } from "zod";
 
+/** Responsibility metadata only; roles never grant authority or alter prompts. */
+export const AgentRoleSchema = z.enum(["ustad", "mushir", "karigar", "shagird"]);
+export type AgentRole = z.infer<typeof AgentRoleSchema>;
+
 /**
  * A named launch bundle: a provider plus the agent-config values a client would
  * otherwise set one control at a time. Field names mirror `AgentSessionConfig`
@@ -18,6 +22,7 @@ export const AgentProfileSchema = z
     icon: z.string().optional(),
     /** An identity colour name shared with host badges. Unknown values draw unthemed. */
     color: z.string().optional(),
+    role: AgentRoleSchema.optional(),
     contextPolicy: ContextPolicySchema.optional(),
     provider: z.string(),
     model: z.string().optional(),

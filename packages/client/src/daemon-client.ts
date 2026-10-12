@@ -2880,6 +2880,12 @@ export class DaemonClient {
     ) {
       throw new Error("Update the host to create agents with profiles or context policy.");
     }
+    if (
+      (config.profileId || config.role) &&
+      this.lastServerInfoMessage?.features?.agentRoles !== true
+    ) {
+      throw new Error("Update the host to create agents with role snapshots or profiles.");
+    }
     return config;
   }
 

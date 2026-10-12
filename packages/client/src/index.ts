@@ -233,6 +233,7 @@ export interface PaseoAgentConfig {
   /** Provider and model in `provider/model` format, or select a daemon profile. */
   provider?: string;
   profileId?: PaseoAgentSessionConfig["profileId"];
+  role?: PaseoAgentSessionConfig["role"];
   contextPolicy?: PaseoAgentSessionConfig["contextPolicy"];
   modeId?: PaseoAgentSessionConfig["modeId"];
   thinkingOptionId?: PaseoAgentSessionConfig["thinkingOptionId"];

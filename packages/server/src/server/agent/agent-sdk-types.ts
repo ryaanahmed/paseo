@@ -1,3 +1,4 @@
+import type { AgentRole } from "@getpaseo/protocol/agent-profile";
 import type { ContextPolicy, ContextPolicyStatus } from "@getpaseo/protocol/agent-context-policy";
 import type {
   AgentFeature,
@@ -586,6 +587,8 @@ export interface ImportedProviderSession {
 }
 
 export interface AgentSessionConfig {
+  /** Creation-time responsibility snapshot; does not grant workspace authority. */
+  role?: AgentRole;
   contextPolicy?: ContextPolicy;
   contextStatus?: ContextPolicyStatus;
   profileId?: string;

@@ -55,3 +55,10 @@ it("omits scope fields for an agent without a context policy", async () => {
   expect(serialized).not.toHaveProperty("ProfileId");
   expect(result.data.some((row) => row.key === "ContextPolicy")).toBe(false);
 });
+
+it("shows the recorded role without inferring one for existing agents", async () => {
+  const result = await inspect({ role: "karigar" });
+  expect(result.schema.serialize?.(result.data[0]!)).toMatchObject({ Role: "karigar" });
+  const unroled = await inspect({ title: "Ustad" });
+  expect(unroled.schema.serialize?.(unroled.data[0]!)).not.toHaveProperty("Role");
+});

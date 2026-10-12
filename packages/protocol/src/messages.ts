@@ -1,7 +1,7 @@
 import { AgentExecutionSchema, AgentExecutionQuerySchema } from "./agent-execution.js";
 import { ContextPolicySchema, ContextPolicyStatusSchema } from "./agent-context-policy.js";
 import { PluginRegistryIdentitySchema } from "./plugin-registry.js";
-import { AgentProfileSchema, AgentSkillSelectionSchema } from "./agent-profile.js";
+import { AgentProfileSchema, AgentRoleSchema, AgentSkillSelectionSchema } from "./agent-profile.js";
 export {
   AgentProfileSchema,
   AgentSkillSelectionSchema,
@@ -438,6 +438,7 @@ const ToolPolicySchema = z
   .strict();
 
 const AgentSessionConfigSchema = z.object({
+  role: AgentRoleSchema.optional(),
   contextPolicy: ContextPolicySchema.optional(),
   profileId: z.string().optional(),
   provider: AgentProviderSchema.optional(),
@@ -814,6 +815,7 @@ const AgentActiveTurnPayloadSchema = z.object({
 
 export const AgentSnapshotPayloadSchema = z.object({
   contextStatus: ContextPolicyStatusSchema.optional(),
+  role: AgentRoleSchema.optional(),
   contextPolicy: ContextPolicySchema.optional(),
   profileId: z.string().optional(),
   id: z.string(),
@@ -3708,6 +3710,7 @@ export const ServerInfoStatusPayloadSchema = z
         selectiveAgentTimeline: z.boolean().optional(),
         explicitEventSubscriptions: z.boolean().optional(),
         ownedSubscriptions: z.boolean().optional(),
+        agentRoles: z.boolean().optional(),
         agentContextPolicy: z.boolean().optional(),
         agentExecutionOutcomes: z.boolean().optional(),
         // COMPAT(canonicalSubmittedPrompts): added in v0.2.6, remove gate after 2027-01-30.

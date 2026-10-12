@@ -1,3 +1,4 @@
+import type { AgentRole } from "./agent-profile.js";
 import type { ContextPolicy, ContextPolicyStatus } from "./agent-context-policy.js";
 import type { AgentAttachment } from "./messages.js";
 
@@ -512,6 +513,8 @@ export interface ToolPolicy {
 }
 
 export interface AgentSessionConfig {
+  /** Creation-time responsibility snapshot; does not grant workspace authority. */
+  role?: AgentRole;
   contextPolicy?: ContextPolicy;
   contextStatus?: ContextPolicyStatus;
   profileId?: string;
