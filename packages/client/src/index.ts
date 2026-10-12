@@ -488,6 +488,11 @@ export interface PaseoConfigActions {
   ): Promise<{ requestId: string; config: MutableDaemonConfig }>;
 }
 
+export interface PaseoPluginActions {
+  /** Calls an installed plugin through this client's existing daemon connection. */
+  invoke(pluginId: string, method: string, input: unknown): Promise<unknown>;
+}
+
 export interface PaseoApi {
   dispose(): Promise<void>;
   observeEvents: DaemonClient["observeEvents"];
@@ -497,6 +502,7 @@ export interface PaseoApi {
   readonly agents: PaseoAgentActions;
   readonly providers: PaseoProviderActions;
   readonly config: PaseoConfigActions;
+  readonly plugins: PaseoPluginActions;
 }
 
 export interface PaseoClient extends PaseoApi {
@@ -761,6 +767,9 @@ export function createPaseoApi(
           if (message.type === "providers_snapshot_update") handler(message.payload);
         });
       },
+    },
+    plugins: {
+      invoke: (pluginId, method, input) => daemonClient.invokePluginRpc(pluginId, method, input),
     },
     config: {
       get: (requestId) => daemonClient.getDaemonConfig(requestId),

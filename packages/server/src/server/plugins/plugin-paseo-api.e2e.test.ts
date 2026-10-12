@@ -521,3 +521,80 @@ export default function contribute(server: PluginServerContext) {
     await daemon.close();
   }
 }, 60_000);
+
+test("plugin handlers invoke another plugin through the shared Paseo API", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "paseo-plugin-rpc-"));
+  roots.push(root);
+  const targetDirectory = path.join(root, "target");
+  const bridgeDirectory = path.join(root, "bridge");
+  for (const [directory, id] of [
+    [targetDirectory, "rpc-target"],
+    [bridgeDirectory, "rpc-bridge"],
+  ]) {
+    await mkdir(directory);
+    await writeFile(
+      path.join(directory, "paseo-plugin.json"),
+      JSON.stringify({
+        id,
+        requirements: { paseo: `>=${resolveDaemonVersion(import.meta.url)}` },
+      }),
+    );
+  }
+  const contractSource = `
+import { defineRpc } from "@getpaseo/plugin";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { z } from "zod";
+const output = z.object({ value: z.string() });
+const call = defineRpc({ name: "call", input: z.object({ value: z.string(), fail: z.boolean().optional() }), output });
+`;
+  await writeFile(
+    path.join(targetDirectory, "index.server.ts"),
+    contractSource +
+      `
+export default function contribute(server: PluginServerContext) {
+  server.handle(call, ({ value, fail }) => {
+    if (fail) throw new Error("Target refused request");
+    return { value: "target:" + value };
+  });
+  return () => undefined;
+}
+`,
+  );
+  await writeFile(
+    path.join(bridgeDirectory, "index.server.ts"),
+    contractSource +
+      `
+export default function contribute(server: PluginServerContext) {
+  server.handle(call, async (input, { paseo }) => {
+    return output.parse(await paseo.plugins.invoke("rpc-target", "call", input));
+  });
+  return () => undefined;
+}
+`,
+  );
+  const daemon = await createTestPaseoDaemon({ agentClients: createTestAgentClients() });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  try {
+    await client.connect();
+    await client.patchDaemonConfig({ pluginsEnabled: true });
+    await expect(client.installDirectoryPlugin(targetDirectory)).resolves.toMatchObject({
+      status: "running",
+    });
+    await expect(client.installDirectoryPlugin(bridgeDirectory)).resolves.toMatchObject({
+      status: "running",
+    });
+    await expect(
+      client.invokePluginRpc("rpc-bridge", "call", { value: "forwarded" }),
+    ).resolves.toEqual({ value: "target:forwarded" });
+    await expect(
+      client.invokePluginRpc("rpc-bridge", "call", { value: "rejected", fail: true }),
+    ).rejects.toThrow("Target refused request");
+    await client.removePlugin("rpc-target");
+    await expect(
+      client.invokePluginRpc("rpc-bridge", "call", { value: "unavailable" }),
+    ).rejects.toThrow("Plugin is not available");
+  } finally {
+    await client.close().catch(() => undefined);
+    await daemon.close();
+  }
+}, 60_000);
