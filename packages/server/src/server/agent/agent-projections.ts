@@ -36,13 +36,17 @@ interface RecentProviderSessionProjectionOptions {
   providerLabel: string;
 }
 
-function projectContextPolicy(
+function projectLaunchSnapshot(
   config:
-    | Pick<AgentSessionConfig, "contextPolicy" | "contextStatus" | "profileId">
+    | Pick<AgentSessionConfig, "role" | "contextPolicy" | "contextStatus" | "profileId">
     | null
     | undefined,
-): Pick<AgentSnapshotPayload, "contextPolicy" | "contextStatus" | "profileId"> {
-  const fields: Pick<AgentSnapshotPayload, "contextPolicy" | "contextStatus" | "profileId"> = {};
+): Pick<AgentSnapshotPayload, "role" | "contextPolicy" | "contextStatus" | "profileId"> {
+  const fields: Pick<
+    AgentSnapshotPayload,
+    "role" | "contextPolicy" | "contextStatus" | "profileId"
+  > = {};
+  if (config?.role) fields.role = config.role;
   if (config?.contextPolicy) fields.contextPolicy = config.contextPolicy;
   if (config?.contextStatus) fields.contextStatus = config.contextStatus;
   if (config?.profileId) fields.profileId = config.profileId;
@@ -130,7 +134,7 @@ export function toAgentPayload(
     provider: agent.provider,
     cwd: agent.cwd,
     ...(agent.workspaceId ? { workspaceId: agent.workspaceId } : {}),
-    ...projectContextPolicy(agent.config),
+    ...projectLaunchSnapshot(agent.config),
     model: agent.config.model ?? null,
     thinkingOptionId,
     effectiveThinkingOptionId,
@@ -241,7 +245,7 @@ export function buildStoredAgentPayload(
     provider: record.provider,
     cwd: record.cwd,
     ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
-    ...projectContextPolicy(record.config),
+    ...projectLaunchSnapshot(record.config),
     model: record.config?.model ?? null,
     thinkingOptionId: record.config?.thinkingOptionId ?? null,
     effectiveThinkingOptionId: resolveEffectiveThinkingOptionId({
@@ -311,6 +315,7 @@ export function toRecentProviderSessionDescriptorPayload(
 
 function buildSerializableConfig(config: AgentSessionConfig): SerializableAgentConfig | null {
   const serializable: SerializableAgentConfig = {};
+  if (config.role) serializable.role = config.role;
   if (config.contextPolicy) serializable.contextPolicy = config.contextPolicy;
   if (config.contextStatus) serializable.contextStatus = config.contextStatus;
   if (config.profileId) serializable.profileId = config.profileId;

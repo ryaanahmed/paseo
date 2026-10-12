@@ -8,6 +8,7 @@ import type { Logger } from "pino";
 
 import type { AgentMode, AgentProvider, AgentSessionConfig } from "../agent-sdk-types.js";
 import type { AgentManager } from "../agent-manager.js";
+import { AgentRoleSchema } from "@getpaseo/protocol/agent-profile";
 import { AgentProfileSchema } from "@getpaseo/protocol/messages";
 import type { DaemonConfigStore } from "../../daemon-config-store.js";
 import {
@@ -1015,6 +1016,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       "Provider/model pair, for example codex/gpt-5.4. Optional when profileId supplies it.",
     ),
     profileId: z.string().min(1).optional().describe("Daemon agent profile ID from list_profiles."),
+    role: AgentRoleSchema.optional().describe(
+      "Creation-time responsibility metadata; does not grant workspace authority.",
+    ),
     contextPolicy: ContextPolicySchema.optional().describe(
       "Required per-agent context limits; defaults to the selected profile's policy.",
     ),
@@ -1442,6 +1446,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       {
         ...explicitProvider,
         profileId: parsedArgs.profileId,
+        role: parsedArgs.role,
         contextPolicy: parsedArgs.contextPolicy,
         featureValues: parsedArgs.settings?.features,
       },

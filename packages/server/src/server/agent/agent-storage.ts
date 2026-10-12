@@ -1,3 +1,4 @@
+import { AgentRoleSchema } from "@getpaseo/protocol/agent-profile";
 import {
   ContextPolicySchema,
   ContextPolicyStatusSchema,
@@ -16,6 +17,7 @@ import { AgentOwnerSchema, daemonExecutionKey, type DaemonAgentOwner } from "./a
 
 const SERIALIZABLE_CONFIG_SCHEMA = z
   .object({
+    role: AgentRoleSchema.optional(),
     contextPolicy: ContextPolicySchema.optional(),
     contextStatus: ContextPolicyStatusSchema.optional(),
     profileId: z.string().optional(),
@@ -86,6 +88,7 @@ const STORED_AGENT_SCHEMA = z.object({
 
 export type SerializableAgentConfig = Pick<
   AgentSessionConfig,
+  | "role"
   | "contextPolicy"
   | "contextStatus"
   | "profileId"

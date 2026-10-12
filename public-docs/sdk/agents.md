@@ -200,6 +200,12 @@ if (agent.pendingPermissions?.length) {
 console.log(agent.lastUsage?.totalCostUsd, agent.runtimeInfo?.sessionId);
 ```
 
+In the personal fork, `agent.current()?.role` reads the optional role saved at
+creation. Pass `role` or select a `profileId` when creating an agent on a host
+advertising `agentRoles`. Role/profile launches against older hosts fail with
+update guidance. The saved role survives resume, provider changes and later
+profile edits; it grants no authority and is not a runtime configuration setting.
+
 The handle exposes `status`, `capabilities`, `availableModes`, `pendingPermissions`, `activeTurn`, `lastUsage`, `lastError`, `features`, `runtimeInfo`, `archivedAt`, `workspaceId`, and `cwd` as properties. All of them read the last snapshot the handle observed and never fetch.
 
 A handle from `ref()` has observed nothing, so every one of them is `null` until `refresh()`, `run()`, `waitForFinish()`, a timeline refetch, or `subscribe()` delivers a snapshot. Optional values in an observed snapshot also read as `null`. Use `current()` when you need the whole snapshot or need to distinguish those states.

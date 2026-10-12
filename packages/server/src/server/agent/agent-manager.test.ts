@@ -12340,3 +12340,52 @@ test("unscoped launches clear provider-configured parent scopes and retain other
   });
   await manager.closeAgent(agent.id);
 });
+
+test("role snapshot survives reload and restart and cannot be added by resume overrides", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "paseo-role-lifecycle-"));
+  const registry = new AgentStorage(join(directory, "agents"), logger);
+  const client = new TestAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, registry, logger });
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: directory, role: "ustad" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    const child = await manager.createAgent(
+      { provider: "codex", cwd: directory, role: "shagird" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    expect(toAgentPayload(child).role).toBe("shagird");
+    await manager.closeAgent(child.id);
+    await manager.reloadAgentSession(agent.id, { role: "mushir" });
+    expect(toAgentPayload(manager.getAgent(agent.id)!).role).toBe("ustad");
+    await manager.closeAgent(agent.id);
+    const restoredStorage = new AgentStorage(join(directory, "agents"), logger);
+    const record = await restoredStorage.get(agent.id);
+    expect(record?.config?.role).toBe("ustad");
+    const restarted = new AgentManager({
+      clients: { codex: client },
+      registry: restoredStorage,
+      logger,
+    });
+    const resumed = await ensureAgentLoaded(agent.id, {
+      agentManager: restarted,
+      agentStorage: restoredStorage,
+      logger,
+    });
+    expect(resumed?.config.role).toBe("ustad");
+    expect(toAgentPayload(resumed!).role).toBe("ustad");
+    await restarted.closeAgent(agent.id);
+
+    const unroled = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+      workspaceId: undefined,
+    });
+    await manager.reloadAgentSession(unroled.id, { role: "ustad" });
+    expect(manager.getAgent(unroled.id)?.config.role).toBeUndefined();
+    await manager.closeAgent(unroled.id);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -1736,7 +1736,7 @@ test("canceled timeline handles and captured state are collectible while their A
 }, 20000);
 
 test("agent create sends daemon profile and explicit policy without resolving them locally", async () => {
-  const { client, ws } = await connectClient({ agentContextPolicy: true });
+  const { client, ws } = await connectClient({ agentContextPolicy: true, agentRoles: true });
   const contextPolicy = {
     providerWindowTokens: 1000000,
     clientWindowTokens: 1000000,
@@ -1903,5 +1903,41 @@ test("agent send reject preserves exact message identity and active-turn behavio
     }),
   );
   await expect(result).rejects.toThrow("agent_busy");
+  await client.close();
+});
+
+test.each([{ role: "shagird" as const, provider: "codex/test" }, { profileId: "worker" }])(
+  "agent create refuses role or profile requests without role support: %j",
+  async (config) => {
+    const { client, ws } = await connectClient({ agentContextPolicy: true });
+    const sentCount = ws.sent.length;
+    await expect(client.agents.create({ config, cwd: "/repo/sdk" })).rejects.toThrow(
+      "Update the host",
+    );
+    expect(ws.sent).toHaveLength(sentCount);
+    await client.close();
+  },
+);
+
+test("agent create forwards explicit role metadata on a capable daemon", async () => {
+  const { client, ws } = await connectClient({ agentRoles: true });
+  const createPromise = client.agents.create({
+    config: { provider: "codex/test", role: "mushir" },
+    cwd: "/repo/sdk",
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request.config).toMatchObject({ role: "mushir", provider: "codex" });
+  ws.message(
+    sessionMessage({
+      type: "status",
+      payload: {
+        status: "agent_created",
+        requestId: request.requestId,
+        agentId: "agent_sdk",
+        agent: createAgent(),
+      },
+    }),
+  );
+  await createPromise;
   await client.close();
 });

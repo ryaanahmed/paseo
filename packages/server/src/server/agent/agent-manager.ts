@@ -201,6 +201,7 @@ function buildStoredAgentConfig(record: StoredAgentRecord): AgentSessionConfig {
   if (!record.config) {
     return config;
   }
+  if (record.config.role) config.role = record.config.role;
   if (record.config.contextPolicy) config.contextPolicy = record.config.contextPolicy;
   if (record.config.contextStatus) config.contextStatus = record.config.contextStatus;
   if (record.config.profileId) config.profileId = record.config.profileId;
@@ -1326,6 +1327,7 @@ export class AgentManager {
       config = {
         ...request.config,
         internal: config.internal,
+        role: config.role,
         contextPolicy: config.contextPolicy,
         profileId: config.profileId,
       };
@@ -1442,6 +1444,8 @@ export class AgentManager {
     // settled before the config is prepared, because a history load reads an archived
     // agent whose working directory may be gone.
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
+    // Durable launch metadata cannot be changed by resume overrides.
+    if (record) mergedConfig.role = record.config?.role;
     if (record?.config?.contextPolicy) {
       mergedConfig.contextPolicy = record.config.contextPolicy;
       mergedConfig.profileId = record.config.profileId;
@@ -1612,6 +1616,7 @@ export class AgentManager {
     const refreshConfig = {
       ...existing.config,
       ...overrides,
+      role: existing.config.role,
       contextPolicy: existing.config.contextPolicy,
       profileId: existing.config.profileId,
       provider,
