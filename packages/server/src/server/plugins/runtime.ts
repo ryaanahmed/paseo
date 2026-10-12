@@ -755,6 +755,13 @@ export class PluginRuntime {
             pluginDirectory: input.pluginDirectory,
             appVersion: this.daemonVersion,
             bundle,
+            dataDirectory: this.dependencies.settingsDirectory
+              ? path.join(
+                  path.dirname(this.dependencies.settingsDirectory),
+                  "plugin-data",
+                  pluginId,
+                )
+              : undefined,
             settingsDirectory: this.dependencies.settingsDirectory
               ? path.join(this.dependencies.settingsDirectory, pluginId)
               : undefined,
