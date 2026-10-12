@@ -1941,3 +1941,73 @@ test("agent create forwards explicit role metadata on a capable daemon", async (
   await createPromise;
   await client.close();
 });
+
+test("plugin actions forward and correlate RPCs over the existing connection", async () => {
+  const { client, ws } = await connectClient();
+  const first = client.plugins.invoke("completion", "watch", { executionId: "one" });
+  const firstRequest = parseSentSessionMessage(ws.sent.at(-1));
+  const second = client.plugins.invoke("completion", "read", { executionId: "two" });
+  const secondRequest = parseSentSessionMessage(ws.sent.at(-1));
+  expect(firstRequest).toMatchObject({
+    type: "plugin.rpc.invoke.request",
+    pluginId: "completion",
+    method: "watch",
+    input: { executionId: "one" },
+  });
+  expect(secondRequest).toMatchObject({
+    type: "plugin.rpc.invoke.request",
+    pluginId: "completion",
+    method: "read",
+    input: { executionId: "two" },
+  });
+  expect(firstRequest.requestId).not.toBe(secondRequest.requestId);
+  ws.message(
+    sessionMessage({
+      type: "plugin.rpc.invoke.response",
+      payload: {
+        requestId: secondRequest.requestId,
+        output: { outcome: "completed" },
+      },
+    }),
+  );
+  ws.message(
+    sessionMessage({
+      type: "plugin.rpc.invoke.response",
+      payload: {
+        requestId: firstRequest.requestId,
+        output: { registered: true },
+      },
+    }),
+  );
+  await expect(first).resolves.toEqual({ registered: true });
+  await expect(second).resolves.toEqual({ outcome: "completed" });
+  expect(FakeWebSocket.instances).toHaveLength(1);
+  await client.close();
+});
+
+test("plugin actions preserve daemon RPC errors without retrying", async () => {
+  const { client, ws } = await connectClient();
+  const result = client.plugins.invoke("completion", "watch", {});
+  const rejection = expect(result).rejects.toMatchObject({
+    name: "DaemonRpcError",
+    message: expect.stringContaining("Plugin access denied"),
+    code: "permission_denied",
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  const sentCount = ws.sent.length;
+  ws.message(
+    sessionMessage({
+      type: "rpc_error",
+      payload: {
+        requestId: request.requestId,
+        requestType: request.type,
+        error: "Plugin access denied",
+        code: "permission_denied",
+      },
+    }),
+  );
+  await rejection;
+  expect(ws.sent).toHaveLength(sentCount);
+  expect(FakeWebSocket.instances).toHaveLength(1);
+  await client.close();
+});

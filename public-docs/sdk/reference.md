@@ -204,6 +204,16 @@ Use `workspace.terminals.create(options?)` and `workspace.terminals.list(options
 
 `config.patch(patch, requestId?)` validates, persists, and returns an updated configuration. Use this administrative surface for host configuration, not per-agent choices. A patch affects every client and future agent using that daemon.
 
+## `client.plugins`
+
+`plugins.invoke(pluginId, method, input)` calls an installed plugin on the connected daemon and
+returns `Promise<unknown>`. Validate the result with that plugin's output schema before using it.
+The call uses the existing connection and its permissions; plugin validation, availability, and
+handler errors reject the promise.
+
+The same method is available on the `paseo` API provided to plugin handlers, so one plugin can
+call another installed plugin without opening a connection or managing credentials.
+
 ## Errors and cleanup
 
 Connection, validation, rejection, and timeout failures reject their promise. Turn outcomes are returned through `PaseoAgentRunResult.status` because permission and provider errors are expected agent states.
