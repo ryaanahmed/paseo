@@ -31,13 +31,19 @@ agent catalog during startup, raise the limit in milliseconds:
 The limit applies independently to every provider refresh and covers availability plus the entire
 catalog probe. `PASEO_PROVIDER_REFRESH_TIMEOUT_MS` sets it when the config field is absent.
 
-## Context policy in launch profiles
+## Roles and context policy in launch profiles
 
-The personal 0.11.2 fork supports `daemon.agentProfiles[].contextPolicy`.
+The personal 0.11.2 fork supports optional `role` and `contextPolicy` fields in
+`daemon.agentProfiles`. The four roles are `ustad` (workspace coordination),
+`mushir` (thinking and design), `karigar` (a substantial workstream), and
+`shagird` (a bounded assignment). A role is descriptive: it changes no prompt,
+model default, permission, workspace seat or integration authority. Profiles
+without a role remain ordinary saved variants.
 Select a profile with `paseo run --profile <id>`, or pass `profileId` through
 SDK/MCP creation. Explicit launch settings override profile defaults. The daemon
-persists the resolved policy with the agent; editing a profile does not change
-existing conversations. Fresh successors copy the concrete policy and receive
+persists the resolved role and policy with the agent; editing a profile does not change
+existing conversations. Independent children select their own roles. Account
+continuations copy the concrete role and policy and receive
 independent scopes. Their original profile identity is provenance, not a request
 to resolve that profile again.
 
@@ -69,14 +75,20 @@ leaves a private provisioning marker and blocks automatic retry: investigate the
 scope store before removing that marker, because scope creation is not idempotent.
 Do not close a scope while any provider process might still use it.
 
-The daemon advertises support for profile/policy-bearing creation.
-Do not edit scoped profiles with the stock desktop/mobile profile editor: saving
-even a name change discards `contextPolicy`. The fork editor preserves it.
+The fork client extends the existing profile editor with role and explicit
+context controls. The model picker searches role, saved variant, provider and
+model terms together. Selecting a profile for an existing agent changes supported
+model settings; it does not rewrite its launch role or scope. The role/context
+control in the composer inspects the agent's saved values and last scope reading.
 
-The fork SDK refuses older daemons. Stock desktop/mobile builds do not send the
-new profile identity and cannot launch scoped profiles; use the fork CLI/MCP/SDK
-until the corresponding app change is shipped. Existing ordinary app operations
-remain wire-compatible.
+New SDK profile launches require `agentRoles`; scoped launches also require
+`agentContextPolicy`. Update the host before using the matching client. Missing
+capabilities produce an explicit error rather than dropping launch metadata.
+
+Stock desktop/mobile builds still lack these controls and can drop context
+policy when editing profiles. Source changes do not update installed clients;
+ship the fork client or use its CLI/MCP/SDK until that client is available.
+Ordinary unprofiled creation remains wire-compatible.
 
 ## Provider options
 

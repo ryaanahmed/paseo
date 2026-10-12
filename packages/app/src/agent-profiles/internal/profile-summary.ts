@@ -1,3 +1,4 @@
+import { AGENT_ROLE_DETAILS } from "../roles";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
 import type { AgentProfile } from "@getpaseo/protocol/messages";
 import { formatAgentModeLabel, formatThinkingOptionLabel } from "@/agent-controls/labels";
@@ -29,6 +30,10 @@ export function buildAgentProfileTags(input: {
   const tags: AgentProfileTag[] = [
     { id: "provider", label: entry?.label ?? input.profile.provider },
   ];
+
+  if (input.profile.role) {
+    tags.unshift({ id: "role", label: AGENT_ROLE_DETAILS[input.profile.role].label });
+  }
 
   const modelId = input.profile.model?.trim();
   if (modelId) {

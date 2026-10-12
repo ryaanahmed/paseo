@@ -115,3 +115,41 @@ describe("normalizeAgentSnapshot", () => {
     expect(nonString.parentAgentId).toBeNull();
   });
 });
+
+it("preserves launch metadata through client normalization and cache projection", () => {
+  const launchMetadata = {
+    role: "karigar" as const,
+    profileId: "karigar-codex",
+    contextPolicy: {
+      providerWindowTokens: 1000000,
+      clientWindowTokens: 1000000,
+      outputReserveTokens: 32000,
+      thresholdTokens: 500000,
+    },
+    contextStatus: {
+      scopeId: "public-scope",
+      effectiveInputTokens: 500000,
+      inputCapacityTokens: 968000,
+      limitingReason: "scope_threshold",
+      baseThresholdTokens: 128000,
+      observedAt: "2026-10-12T00:00:00Z",
+    },
+  };
+  const snapshot = { ...createSnapshot(), ...launchMetadata };
+  const agent = normalizeAgentSnapshot(snapshot, "server-1");
+  expect(agent).toMatchObject(launchMetadata);
+  const cachedSnapshot = JSON.parse(JSON.stringify(projectAgentSnapshot(agent)));
+  expect(normalizeAgentSnapshot(cachedSnapshot, "server-1")).toMatchObject(launchMetadata);
+});
+
+it("keeps absent role and context policy absent for older snapshots", () => {
+  const agent = normalizeAgentSnapshot(createSnapshot({ title: "Ustad" }), "server-1");
+  expect(agent.role).toBeUndefined();
+  expect(agent.contextPolicy).toBeUndefined();
+  expect(agent.contextStatus).toBeUndefined();
+  const projected = projectAgentSnapshot(agent);
+  expect(projected).not.toHaveProperty("role");
+  expect(projected).not.toHaveProperty("profileId");
+  expect(projected).not.toHaveProperty("contextPolicy");
+  expect(projected).not.toHaveProperty("contextStatus");
+});

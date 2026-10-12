@@ -2588,6 +2588,7 @@ export const ptBR: TranslationResources = {
           "Nenhum perfil ainda. Adicione um para abrir terminais com um comando específico.",
       },
       agentProfiles: {
+        rolesUnsupported: "Atualize este host para criar agentes a partir de perfis com funções.",
         sectionTitle: "Perfis de agente",
         unavailable: "Conecte-se a este host para gerenciar perfis de agente",
         unsupported: "Este host executa um daemon que ainda não é compatível com perfis de agente",

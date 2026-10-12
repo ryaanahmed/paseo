@@ -859,3 +859,35 @@ describe("ReplicaCache", () => {
     expect(storage.cleanups).toBe(1);
   });
 });
+
+it("restores role and context metadata from persisted agent rows without inferring absent policy", async () => {
+  const storage = new MemoryStorage();
+  const writer = createCache(storage);
+  const content = directory();
+  const launchMetadata = {
+    role: "shagird" as const,
+    profileId: "sa-worker-codex",
+    contextPolicy: {
+      providerWindowTokens: 1000000,
+      clientWindowTokens: 1000000,
+      outputReserveTokens: 32000,
+      thresholdTokens: 500000,
+    },
+    contextStatus: {
+      scopeId: "public-scope",
+      effectiveInputTokens: 500000,
+      inputCapacityTokens: 968000,
+      limitingReason: "scope_threshold",
+      baseThresholdTokens: 128000,
+      observedAt: "2026-10-12T00:00:00Z",
+    },
+  };
+  content.agents.set("scoped-agent", { ...agent("scoped-agent"), ...launchMetadata });
+  commitDirectory(writer, SERVER_ID, content);
+  await writer.flush();
+  const restored = await createCache(storage).readDirectory(SERVER_ID);
+  expect(restored.agents.get("scoped-agent")).toMatchObject(launchMetadata);
+  expect(restored.agents.get("agent-1")?.role).toBeUndefined();
+  expect(restored.agents.get("agent-1")?.contextPolicy).toBeUndefined();
+  expect(restored.agents.get("agent-1")?.contextStatus).toBeUndefined();
+});

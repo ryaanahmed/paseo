@@ -16,6 +16,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { toErrorMessage } from "@/utils/error-messages";
+import { AgentProfilePolicyFields } from "./agent-profile-policy-fields";
 import { AgentProfileAppearanceField } from "./agent-profile-appearance-field";
 import type {
   AgentProfileFormModel,
@@ -25,6 +26,7 @@ import type {
 } from "../internal/profile-form-model";
 import {
   useAgentProfileFormCatalog,
+  useAgentProfileFormCapabilities,
   useAgentProfileFormFeatures,
 } from "../internal/use-profile-form-inputs";
 import {
@@ -141,6 +143,7 @@ function OpenAgentProfileEditModal({
   const model = useAgentProfileFormModel(snapshot);
   const state = useAgentProfileFormState(model);
   useAgentProfileFormCatalog({ serverId, model });
+  useAgentProfileFormCapabilities({ serverId, model });
   useAgentProfileFormFeatures({ serverId, model, state });
 
   const sheetHeader = useMemo<SheetHeader>(
@@ -256,6 +259,8 @@ function OpenAgentProfileEditModal({
             </Field>
           </View>
         </View>
+
+        <AgentProfilePolicyFields model={model} state={state} size={controlSize} />
 
         <SelectField
           label={t("settings.host.agentProfiles.providerLabel")}

@@ -1,3 +1,4 @@
+import { buildAgentProfileTags } from "./profile-summary";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
 import { describe, expect, it } from "vitest";
 import {
@@ -474,5 +475,157 @@ describe("buildFeatureRequestKey", () => {
     expect(buildFeatureRequestKey({ provider: "claude", modeId: "a" })).not.toBe(
       buildFeatureRequestKey({ provider: "claude", model: "a" }),
     );
+  });
+});
+
+describe("profile responsibility and context policy", () => {
+  const policy = {
+    providerWindowTokens: 1000000,
+    clientWindowTokens: 900000,
+    outputReserveTokens: 20000,
+    thresholdTokens: 500000,
+  };
+
+  function openScopedProfile(): AgentProfileFormModel {
+    const model = openAgentProfileForm({
+      mode: "edit",
+      profile: {
+        id: "scoped",
+        name: "Workspace coordinator",
+        provider: "codex",
+        model: "gpt-5.2-codex",
+        modeId: "read-only",
+        role: "ustad",
+        contextPolicy: policy,
+      },
+    });
+    model.applyCapabilities({ agentRoles: true, agentContextPolicy: true });
+    return model;
+  }
+
+  it("preserves exact saved role and limits when renamed before catalog resolution", () => {
+    const model = openScopedProfile();
+    model.setName("Renamed coordinator");
+    expect(model.getState().submitValue).toEqual({
+      name: "Renamed coordinator",
+      provider: "codex",
+      model: "gpt-5.2-codex",
+      modeId: "read-only",
+      role: "ustad",
+      contextPolicy: policy,
+    });
+  });
+
+  it("does not infer a role or smaller limits from a name", () => {
+    const model = openAgentProfileForm({
+      mode: "create",
+      seed: { name: "Shagird", provider: "codex" },
+    });
+    expect(model.getState().role).toBeNull();
+    expect(model.getState().contextMode).toBe("host-default");
+    expect(model.getState().submitValue).toEqual({ name: "Shagird", provider: "codex" });
+  });
+
+  it("clears role and explicit policy without changing model or permission mode", () => {
+    const model = openScopedProfile();
+    model.setRole("shagird");
+    expect(model.getState().submitValue?.modeId).toBe("read-only");
+    model.setRole(null);
+    model.setContextMode("host-default");
+    expect(model.getState().submitValue).toEqual({
+      name: "Workspace coordinator",
+      provider: "codex",
+      model: "gpt-5.2-codex",
+      modeId: "read-only",
+    });
+    model.setContextMode("explicit");
+    expect(model.getState().submitValue?.contextPolicy).toEqual(policy);
+  });
+
+  it("requires explicit values instead of inventing defaults", () => {
+    const model = openAgentProfileForm({
+      mode: "create",
+      seed: { name: "Worker", provider: "codex" },
+    });
+    model.applyCapabilities({ agentRoles: true, agentContextPolicy: true });
+    model.setContextMode("explicit");
+    expect(model.getState().canSubmit).toBe(false);
+    expect(model.getState().contextError).toBe(
+      "Enter whole token counts for all four context limits.",
+    );
+    model.setContextInput("providerWindowTokens", "1000000");
+    model.setContextInput("clientWindowTokens", "900000");
+    model.setContextInput("outputReserveTokens", "20000");
+    model.setContextInput("thresholdTokens", "500000");
+    expect(model.getState().submitValue?.contextPolicy).toEqual(policy);
+  });
+
+  it("checks threshold against the smaller window minus output reserve", () => {
+    const model = openScopedProfile();
+    model.setContextInput("thresholdTokens", "880001");
+    expect(model.getState().canSubmit).toBe(false);
+    expect(model.getState().contextError).toBe(
+      "Threshold must fit within the smaller window after subtracting the output reserve.",
+    );
+    model.setContextInput("thresholdTokens", "880000");
+    expect(model.getState().canSubmit).toBe(true);
+    model.setContextInput("providerWindowTokens", "400000");
+    expect(model.getState().canSubmit).toBe(false);
+    model.setContextInput("thresholdTokens", "380000");
+    expect(model.getState().canSubmit).toBe(true);
+  });
+
+  it.each(["", "-1", "1.5", "1e6", "Infinity", "9007199254740992"])(
+    "rejects invalid token input %s",
+    (value) => {
+      const model = openScopedProfile();
+      model.setContextInput("thresholdTokens", value);
+      expect(model.getState().canSubmit).toBe(false);
+      expect(model.getState().submitValue).toBeNull();
+    },
+  );
+
+  it("accepts a zero output reserve but rejects zero windows or threshold", () => {
+    const model = openScopedProfile();
+    model.setContextInput("outputReserveTokens", "0");
+    expect(model.getState().canSubmit).toBe(true);
+    model.setContextInput("thresholdTokens", "0");
+    expect(model.getState().canSubmit).toBe(false);
+    model.setContextInput("thresholdTokens", "1");
+    model.setContextInput("clientWindowTokens", "0");
+    expect(model.getState().canSubmit).toBe(false);
+  });
+
+  it("preserves stored values on hosts that cannot edit them", () => {
+    const model = openScopedProfile();
+    model.applyCapabilities({ agentRoles: false, agentContextPolicy: false });
+    model.setRole("mushir");
+    model.setContextMode("host-default");
+    model.setContextInput("thresholdTokens", "100000");
+    model.setName("Renamed on older host");
+    expect(model.getState().submitValue?.role).toBe("ustad");
+    expect(model.getState().submitValue?.contextPolicy).toEqual(policy);
+  });
+});
+
+describe("profile responsibility summary", () => {
+  it("shows an explicitly saved role without interpreting the profile name", () => {
+    expect(
+      buildAgentProfileTags({
+        profile: { id: "p1", name: "Shagird", provider: "codex" },
+        entries: undefined,
+        formatFeatureCount: String,
+      }),
+    ).toEqual([{ id: "provider", label: "codex" }]);
+    expect(
+      buildAgentProfileTags({
+        profile: { id: "p1", name: "Personal variant", provider: "codex", role: "mushir" },
+        entries: undefined,
+        formatFeatureCount: String,
+      }),
+    ).toEqual([
+      { id: "role", label: "Mushir" },
+      { id: "provider", label: "codex" },
+    ]);
   });
 });

@@ -2574,6 +2574,8 @@ export const ja: TranslationResources = {
           "プロファイルがまだありません。特定のコマンドでターミナルを起動するために追加してください。",
       },
       agentProfiles: {
+        rolesUnsupported:
+          "ロール付きプロファイルからエージェントを作成するには、このホストを更新してください。",
         sectionTitle: "エージェントプロファイル",
         unavailable: "エージェントプロファイルを管理するにはこのホストに接続してください",
         unsupported: "このホストで動作するデーモンはまだエージェントプロファイルに対応していません",

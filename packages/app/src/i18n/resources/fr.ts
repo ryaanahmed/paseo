@@ -2606,6 +2606,8 @@ export const fr: TranslationResources = {
           "Aucun profil pour le moment. Ajoutez-en un pour lancer des terminaux avec une commande précise.",
       },
       agentProfiles: {
+        rolesUnsupported:
+          "Mettez cet hôte à jour pour créer des agents à partir de profils avec un rôle.",
         sectionTitle: "Profils d’agent",
         unavailable: "Connectez-vous à cet hôte pour gérer les profils d’agent",
         unsupported: "Le daemon de cet hôte ne prend pas encore en charge les profils d’agent",

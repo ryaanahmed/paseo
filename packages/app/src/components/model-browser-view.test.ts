@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { AgentProfilePickerRow } from "@/agent-profiles/internal/use-agent-profile-picker";
 import type {
   ProviderSelectionModelRow,
   ProviderSelectorProvider,
 } from "@/provider-selection/provider-selection";
 import {
+  filterAgentProfileRows,
   resolveInitialModelBrowserView,
   resolveModelBrowserAllView,
   groupProfilesByProviderModel,
@@ -232,5 +234,51 @@ describe("model browser all view", () => {
         isSearchFocused: true,
       }),
     ).toEqual({ kind: "noSearchMatches" });
+  });
+});
+
+describe("profile search", () => {
+  const profiles: AgentProfilePickerRow[] = [
+    {
+      id: "ustad-astra",
+      name: "Astra",
+      role: "ustad",
+      provider: "codex",
+      modelId: "gpt-6-astra",
+      icon: "",
+      color: "",
+      summary: "Ustad · Codex · GPT-6 Astra",
+    },
+    {
+      id: "shagird-sol",
+      name: "Sol",
+      role: "shagird",
+      provider: "codex",
+      modelId: "gpt-6-sol",
+      icon: "",
+      color: "",
+      summary: "Shagird · Codex · GPT-6 Sol",
+    },
+    {
+      id: "legacy",
+      name: "Unassigned",
+      provider: "claude",
+      modelId: "opus",
+      icon: "",
+      color: "",
+      summary: "Claude Code · Opus",
+    },
+  ];
+
+  it("filters explicit roles and combines role with provider/model terms", () => {
+    expect(filterAgentProfileRows(profiles, "USTAD codex astra")).toEqual([profiles[0]]);
+    expect(filterAgentProfileRows(profiles, "shagird")).toEqual([profiles[1]]);
+    expect(filterAgentProfileRows(profiles, "ustad sol")).toEqual([]);
+  });
+
+  it("keeps saved variant names searchable and unassigned profiles available", () => {
+    expect(filterAgentProfileRows(profiles, "astra")).toEqual([profiles[0]]);
+    expect(filterAgentProfileRows(profiles, "claude opus")).toEqual([profiles[2]]);
+    expect(filterAgentProfileRows(profiles, "")).toEqual(profiles);
   });
 });

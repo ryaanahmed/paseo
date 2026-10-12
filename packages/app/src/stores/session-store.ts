@@ -34,6 +34,7 @@ import type {
   AgentPersistenceHandle,
 } from "@getpaseo/protocol/agent-types";
 import type {
+  AgentSnapshotPayload,
   ServerInfoStatusPayload,
   ProjectPlacementPayload,
   ServerCapabilities,
@@ -70,6 +71,10 @@ export interface AgentRuntimeInfo {
 }
 
 export interface Agent {
+  role?: AgentSnapshotPayload["role"];
+  profileId?: AgentSnapshotPayload["profileId"];
+  contextPolicy?: AgentSnapshotPayload["contextPolicy"];
+  contextStatus?: AgentSnapshotPayload["contextStatus"];
   serverId: string;
   id: string;
   provider: AgentProvider;

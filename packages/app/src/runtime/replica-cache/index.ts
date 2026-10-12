@@ -1,4 +1,9 @@
 import { z } from "zod";
+import { AgentRoleSchema } from "@getpaseo/protocol/agent-profile";
+import {
+  ContextPolicySchema,
+  ContextPolicyStatusSchema,
+} from "@getpaseo/protocol/agent-context-policy";
 import {
   AgentStatusSchema,
   AgentTimelineItemPayloadSchema,
@@ -221,6 +226,10 @@ const StoredProjectPlacementSchema = z.strictObject({
 });
 
 const StoredAgentSnapshotSchema = z.strictObject({
+  role: AgentRoleSchema.optional(),
+  profileId: z.string().optional(),
+  contextPolicy: ContextPolicySchema.optional(),
+  contextStatus: ContextPolicyStatusSchema.optional(),
   id: z.string(),
   provider: AgentProviderSchema,
   cwd: z.string(),
@@ -607,6 +616,10 @@ function serializeAgentTurn(agent: Agent): NonNullable<StoredAgent["turn"]> {
 function serializeAgent(agent: Agent): StoredAgent {
   const snapshot = {
     id: agent.id,
+    role: agent.role,
+    profileId: agent.profileId,
+    contextPolicy: agent.contextPolicy,
+    contextStatus: agent.contextStatus,
     provider: agent.provider,
     cwd: agent.cwd,
     ...(agent.workspaceId ? { workspaceId: agent.workspaceId } : {}),
