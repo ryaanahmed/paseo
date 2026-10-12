@@ -46,6 +46,31 @@ test.describe("Agent profiles settings", () => {
     }
   });
 
+  test("editing a scoped profile preserves its context policy", async ({ page }) => {
+    const profile = {
+      id: "scoped-profile-edit",
+      name: "Scoped review",
+      provider: "mock",
+      model: "one-minute-stream",
+      modeId: "approval-test",
+      notes: "Before edit",
+      contextPolicy: {
+        providerWindowTokens: 1000000,
+        clientWindowTokens: 1000000,
+        outputReserveTokens: 32000,
+        thresholdTokens: 512000,
+      },
+    };
+    const seed = await seedAgentProfiles([profile]);
+    try {
+      await openAgentProfileSettings(page);
+      await editAgentProfile(page, profile.name, { notes: "After edit" });
+      await expectHostAgentProfiles([{ ...profile, notes: "After edit" }]);
+    } finally {
+      await seed.restore();
+    }
+  });
+
   test("host owner creates, edits, reorders and removes agent profiles", async ({ page }) => {
     // The journey owns the list, so it starts from an empty one whatever the
     // worker ran before, and hands it back untouched.

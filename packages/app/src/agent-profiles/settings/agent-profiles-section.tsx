@@ -53,9 +53,18 @@ export function AgentProfilesSection({ serverId }: { serverId: string }): ReactE
       const editing = editTarget?.mode === "edit" ? editTarget.profile : undefined;
       // The edited profile is replaced, not merged: `value` omits the fields the
       // user cleared, so spreading it over the stored record would silently keep
-      // the old model, mode, thinking option or notes.
+      // the old model, mode, thinking option or notes. Context policy has no
+      // editor control, so preserve its host-owned value.
       const next: AgentProfile[] = editing
-        ? current.map((entry) => (entry.id === editing.id ? { id: entry.id, ...value } : entry))
+        ? current.map((entry) =>
+            entry.id === editing.id
+              ? {
+                  id: entry.id,
+                  ...value,
+                  ...(entry.contextPolicy ? { contextPolicy: entry.contextPolicy } : {}),
+                }
+              : entry,
+          )
         : [...current, { id: generateAgentProfileId(), ...value }];
       await saveProfiles(next);
     },
