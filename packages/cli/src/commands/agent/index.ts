@@ -8,6 +8,7 @@ import { addLogsOptions, runLogsCommand } from "./logs.js";
 import { addStopOptions, runStopCommand } from "./stop.js";
 import { addSendOptions, runSendCommand } from "./send.js";
 import { addInspectOptions, runInspectCommand } from "./inspect.js";
+import { addExecutionOptions, runExecutionCommand } from "./execution.js";
 import { addWaitOptions, runWaitCommand } from "./wait.js";
 import { addAttachOptions, runAttachCommand } from "./attach.js";
 import { addReloadOptions, runReloadCommand } from "./reload.js";
@@ -63,6 +64,10 @@ export function createAgentCommand(): Command {
 
   addJsonAndDaemonHostOptions(addInspectOptions(agent.command("inspect"))).action(
     withOutput(runInspectCommand),
+  );
+
+  addJsonAndDaemonHostOptions(addExecutionOptions(agent.command("execution"))).action(
+    withOutput(runExecutionCommand),
   );
 
   addJsonAndDaemonHostOptions(addWaitOptions(agent.command("wait"))).action(

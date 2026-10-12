@@ -77,7 +77,12 @@ async function startOrReplaceRun(
   iterator: AsyncGenerator<import("./agent-sdk-types.js").AgentStreamEvent>;
   replaced: boolean;
 }> {
-  const replaced = Boolean(options?.replaceRunning && agentManager.hasInFlightRun(agentId));
+  if (options?.activeTurnBehavior === "reject") assertAgentNotBusy(agentManager, agentId);
+  const replaced = Boolean(
+    options?.activeTurnBehavior !== "reject" &&
+    options?.replaceRunning &&
+    agentManager.hasInFlightRun(agentId),
+  );
   const iterator = replaced
     ? await agentManager.replaceAgentRun(agentId, prompt, options?.runOptions)
     : agentManager.streamAgent(agentId, prompt, options?.runOptions);
@@ -92,6 +97,13 @@ async function drainAgentRunIterator(
   }
 }
 
+function assertAgentNotBusy(agentManager: AgentRunController, agentId: string): void {
+  const agent = agentManager.getAgent(agentId);
+  if (agentManager.hasInFlightRun(agentId) || agent?.pendingPermissions.size) {
+    throw new Error("agent_busy");
+  }
+}
+
 export async function startAgentRun(
   agentManager: AgentRunController,
   agentId: string,
@@ -99,6 +111,8 @@ export async function startAgentRun(
   logger: Logger,
   options?: StartAgentRunOptions,
 ): Promise<{ disposition: PromptDispatchDisposition }> {
+  // Reject before even out-of-band commands can affect an active coordinator.
+  if (options?.activeTurnBehavior === "reject") assertAgentNotBusy(agentManager, agentId);
   const snapshot = agentManager.getAgent(agentId);
   logger.trace(
     {
@@ -318,6 +332,7 @@ export async function sendPromptToAgent(
   const record = await params.agentStorage.get(params.agentId);
   let archivedAtToRestore: string | null = null;
   if (record?.archivedAt) {
+    if (params.activeTurnBehavior === "reject") throw new Error("agent_archived");
     if (!unarchive) {
       return { disposition: "turn_started" };
     }

@@ -1,4 +1,5 @@
 import { GobstopperContextManager } from "./agent/gobstopper-context.js";
+import { AgentExecutionStore } from "./agent/agent-execution-store.js";
 import type { PluginRegistries } from "@getpaseo/protocol/plugin-registry";
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
@@ -947,7 +948,12 @@ export async function createPaseoDaemon(
     if (git) configureGitProcessPolicy(git);
   });
   const initialAgentManagerState = providerSnapshotManager.getAgentManagerProviderState();
+  const executionStore = new AgentExecutionStore(
+    path.join(config.paseoHome, "runtime", "agent-executions"),
+  );
+  await executionStore.initialize();
   const agentManager = new AgentManager({
+    executionStore,
     contextManager: new GobstopperContextManager({
       stateDirectory: path.join(config.paseoHome, "runtime", "context-scopes"),
     }),

@@ -1,3 +1,5 @@
+import type { AgentExecution, AgentExecutionQuery } from "@getpaseo/protocol/agent-execution";
+export type { AgentExecution, AgentExecutionQuery } from "@getpaseo/protocol/agent-execution";
 import type { OwnedSubscription } from "./connection/index.js";
 export type { OwnedSubscription, SubscriptionObserver } from "./connection/index.js";
 import type { DaemonClientConfig } from "./daemon-client.js";
@@ -364,6 +366,8 @@ export interface PaseoAgentHandle {
   readonly timeline: PaseoAgentTimelineHandle;
   current(): PaseoAgent | null;
   refresh(requestId?: string): Promise<PaseoAgentRefetchResult | null>;
+  /** Reads one exact execution; null means no record, not successful or cancelled work. */
+  execution(query: AgentExecutionQuery): Promise<AgentExecution | null>;
   send(text: string, options?: PaseoAgentSendOptions): Promise<void>;
   respondToPermission(options: PaseoAgentRespondToPermissionOptions): Promise<void>;
   /** Sends a prompt and resolves when that turn finishes or needs attention. */
@@ -946,6 +950,7 @@ function createAgentHandleFactory(
         current = result?.agent ?? null;
         return result;
       },
+      execution: (query) => daemonClient.getAgentExecution(id, query),
       send: async (text, options) => {
         await daemonClient.sendAgentMessage(id, text, options);
       },

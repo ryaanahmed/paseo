@@ -1,6 +1,8 @@
 import { GobstopperContextManager, stripGobstopperScope } from "./gobstopper-context.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
+import type { AgentExecution, AgentExecutionQuery } from "@getpaseo/protocol/agent-execution";
+import { AgentExecutionStore } from "./agent-execution-store.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
@@ -322,6 +324,7 @@ export interface CreateAgentOptions {
 }
 
 export interface AgentManagerOptions {
+  executionStore?: AgentExecutionStore;
   contextManager?: GobstopperContextManager;
   pluginLifecycle?: PluginLifecycle;
   /** An internal workspace makes every agent created inside it internal. */
@@ -754,6 +757,11 @@ export class AgentManager {
   private readonly steerEventBarriers = new Map<string, SteerEventBarrier>();
   private readonly foregroundMutationTails = new Map<string, Promise<void>>();
   private readonly runs = new AgentRunState();
+  private readonly executionStore?: AgentExecutionStore;
+  private readonly activeExecutions = new Map<
+    string,
+    { executionId: string; turnId: string | null; session: AgentSession }
+  >();
   private readonly subscribers = new Set<SubscriptionRecord>();
   private readonly idFactory: () => string;
   private readonly registry?: AgentStorage;
@@ -783,6 +791,7 @@ export class AgentManager {
   private acceptingAgentRegistrations = true;
 
   constructor(options: AgentManagerOptions) {
+    this.executionStore = options.executionStore;
     this.contextManager = options.contextManager;
     this.pluginLifecycle = options.pluginLifecycle;
     this.idFactory = options?.idFactory ?? (() => randomUUID());
@@ -824,6 +833,27 @@ export class AgentManager {
 
   registerClient(provider: AgentProvider, client: AgentClient): void {
     this.clients.set(provider, client);
+  }
+
+  getExecution(agentId: string, query: AgentExecutionQuery): Promise<AgentExecution | null> {
+    if (!this.executionStore) throw new Error("agent_execution_unavailable");
+    return this.executionStore.get(agentId, query);
+  }
+
+  private async markExecutionUnknown(agentId: string, errorCode: string): Promise<void> {
+    const execution = this.activeExecutions.get(agentId);
+    if (!execution || !this.executionStore) return;
+    await this.executionStore.update(agentId, execution.executionId, {
+      status: "unknown",
+      errorCode,
+    });
+    this.forgetExecution(agentId, execution.executionId);
+  }
+
+  private forgetExecution(agentId: string, executionId: string): void {
+    if (this.activeExecutions.get(agentId)?.executionId === executionId) {
+      this.activeExecutions.delete(agentId);
+    }
   }
 
   updateProviderRegistry(input: {
@@ -1616,6 +1646,7 @@ export class AgentManager {
       await this.closeReloadedSession(existing.session, agentId);
       await this.drainSessionEvents(agentId);
       this.cancelRunningProviderSubagents(agentId);
+      await this.markExecutionUnknown(agentId, "session_closed_without_outcome");
       closedExisting = this.prepareAgentForClosure(existing, "agent reloaded");
       await this.persistSnapshot(closedExisting);
       this.assertAcceptingAgentRegistrations();
@@ -1811,6 +1842,10 @@ export class AgentManager {
     // Retain ownership until shutdown succeeds. A failed close may still own a
     // native writer, so publishing a resumable closed snapshot would orphan it.
     await agent.session.close();
+    if (this.executionStore) {
+      await this.drainSessionEvents(agentId);
+      await this.markExecutionUnknown(agentId, "session_closed_without_outcome");
+    }
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = this.prepareAgentForClosure(agent, "agent closed");
 
@@ -2568,13 +2603,63 @@ export class AgentManager {
     options?: AgentRunOptions;
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
+    if (this.executionStore) {
+      const startedAt = new Date().toISOString();
+      try {
+        await this.executionStore.create({
+          agentId,
+          executionId: pendingRun.token,
+          provider: agent.provider,
+          providerSessionId: agent.session.describePersistence()?.sessionId,
+          turnId: null,
+          clientMessageId: options?.clientMessageId,
+          status: "starting",
+          startedAt,
+          updatedAt: startedAt,
+        });
+        // This binding outlives the stream observer and its foreground waiter.
+        this.activeExecutions.set(agentId, {
+          executionId: pendingRun.token,
+          turnId: null,
+          session: agent.session,
+        });
+      } catch (error) {
+        this.runs.settleForegroundRun(agentId, pendingRun.token);
+        throw error;
+      }
+    }
     try {
+      if (pendingRun.settled) {
+        await this.executionStore?.update(agentId, pendingRun.token, {
+          status: "unknown",
+          errorCode: "run_settled_before_start",
+        });
+        throw new Error(`Agent ${agentId} run was settled before its turn started`);
+      }
       const result = await agent.session.startTurn(prompt, options);
+      if (this.executionStore) {
+        const providerSessionId = agent.session.describePersistence()?.sessionId;
+        await this.executionStore.update(agentId, pendingRun.token, {
+          status: "running",
+          turnId: result.turnId,
+          ...(providerSessionId ? { providerSessionId } : {}),
+        });
+        const execution = this.activeExecutions.get(agentId);
+        if (execution?.executionId === pendingRun.token) execution.turnId = result.turnId;
+      }
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
       }
       return result.turnId;
     } catch (error) {
+      // A rejected provider call can have lost its acknowledgement after acceptance.
+      if (this.executionStore) {
+        await this.executionStore.update(agentId, pendingRun.token, {
+          status: "unknown",
+          errorCode: "provider_acceptance_unknown",
+        });
+        this.forgetExecution(agentId, pendingRun.token);
+      }
       if (pendingRun.settled) {
         throw error;
       }
@@ -3191,6 +3276,13 @@ export class AgentManager {
         { agentId, kind: run.kind },
         "cancelAgentRun: acknowledged pending turn still active after timeout, clearing it",
       );
+      if (
+        this.executionStore &&
+        (await this.executionStore.get(agentId, { kind: "execution", executionId: run.token }))
+      ) {
+        await this.executionStore.update(agentId, run.token, { status: "canceled" });
+        this.forgetExecution(agentId, run.token);
+      }
       this.runs.settleForegroundRun(agentId, run.token);
       if (!agent.pendingReplacement) {
         agent.lifecycle = "idle";
@@ -4327,6 +4419,10 @@ export class AgentManager {
 
     // Only update timestamp for live events, not history replay
     if (!options?.fromHistory) {
+      // Commit terminal evidence before public events or idle snapshots expose settlement.
+      if (this.executionStore && isTurnTerminalEvent(event)) {
+        await this.persistExecutionOutcome(agent, event, eventTurnId);
+      }
       this.touchUpdatedAt(agent);
       if (this.agentStreamCoalescer.handle(agent.id, event)) {
         this.traceCoalescerBuffered(agent, event, eventTurnId);
@@ -4375,6 +4471,35 @@ export class AgentManager {
     this.traceHandleStreamEventEnd(agent, event, eventTurnId, flags);
 
     return flags.shouldNotifyWaiters;
+  }
+
+  private async persistExecutionOutcome(
+    agent: ActiveManagedAgent,
+    event: AgentStreamEvent,
+    turnId: string | undefined,
+  ): Promise<void> {
+    if (!this.executionStore || !isTurnTerminalEvent(event)) return;
+    const execution = this.activeExecutions.get(agent.id);
+    if (
+      !execution ||
+      execution.session !== agent.session ||
+      !execution.turnId ||
+      execution.turnId !== turnId
+    )
+      return;
+    if (event.type === "turn_completed") {
+      await this.executionStore.update(agent.id, execution.executionId, { status: "completed" });
+    } else if (event.type === "turn_canceled") {
+      await this.executionStore.update(agent.id, execution.executionId, { status: "canceled" });
+    } else if (event.type === "turn_failed") {
+      const errorCode =
+        event.code && /^[A-Za-z0-9_.:-]{1,128}$/.test(event.code) ? event.code : "provider_failure";
+      await this.executionStore.update(agent.id, execution.executionId, {
+        status: "failed",
+        errorCode,
+      });
+    }
+    this.forgetExecution(agent.id, execution.executionId);
   }
 
   private traceHandleStreamEventStart(

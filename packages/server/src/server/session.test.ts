@@ -3,7 +3,15 @@ import {
   createTestCreationService,
 } from "./test-utils/session-stubs.js";
 import { execSync } from "child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  readdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join, resolve as resolvePath } from "path";
 import pino from "pino";
@@ -23,6 +31,7 @@ import {
   type FileTransferFrame,
 } from "@getpaseo/protocol/binary-frames/index";
 import { Session } from "./session.js";
+import { MessageReceipts } from "./message-receipts/index.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
 import { StructuredAgentFallbackError } from "./agent/agent-response-loop.js";
@@ -288,6 +297,7 @@ vi.mock("./worktree-bootstrap.js", async (importOriginal) => {
 });
 
 interface SessionForTestOptions {
+  messageReceipts?: SessionOptions["messageReceipts"];
   clientId?: string;
   permissions?: readonly DaemonPermission[];
   agentManager?: { [K in keyof SessionOptions["agentManager"]]?: unknown };
@@ -367,7 +377,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
   const messages = options.messages ?? [];
 
   const sessionOptions: SessionOptions = {
-    messageReceipts: createMessageReceiptsStub(),
+    messageReceipts: options.messageReceipts ?? createMessageReceiptsStub(),
     creationService: createTestCreationService(),
     clientId: options.clientId ?? "test-client",
     onMessage: (message) => messages.push(message),
@@ -5814,3 +5824,117 @@ test("provider snapshots preserve versionless visibility while capabilities upda
   ]);
   expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
 });
+
+test("execution query reads exact metadata without hydrating an agent or timeline", async () => {
+  const messages: unknown[] = [];
+  const query = { kind: "submission", clientMessageId: "packet-2" } as const;
+  const execution = {
+    agentId: "agent-1",
+    executionId: "execution-2",
+    provider: "codex",
+    turnId: "turn-2",
+    clientMessageId: "packet-2",
+    status: "completed" as const,
+    startedAt: "2026-10-12T12:00:00.000Z",
+    updatedAt: "2026-10-12T12:01:00.000Z",
+  };
+  const lookups: unknown[] = [];
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      getExecution: async (agentId: string, identity: unknown) => {
+        lookups.push({ agentId, identity });
+        return execution;
+      },
+    },
+  });
+  await session.handleMessage({
+    type: "agent.execution.get.request",
+    requestId: "query-1",
+    agentId: "agent-1",
+    query,
+  });
+  expect(lookups).toEqual([{ agentId: "agent-1", identity: query }]);
+  expect(messages).toEqual([
+    {
+      type: "agent.execution.get.response",
+      payload: { requestId: "query-1", execution, error: null },
+    },
+  ]);
+});
+
+test("execution query preserves missing records as null", async () => {
+  const messages: unknown[] = [];
+  const session = createSessionForTest({
+    messages,
+    agentManager: { getExecution: async () => null },
+  });
+  await session.handleMessage({
+    type: "agent.execution.get.request",
+    requestId: "query-1",
+    agentId: "missing-agent",
+    query: { kind: "execution", executionId: "missing-execution" },
+  });
+  expect(messages).toEqual([
+    {
+      type: "agent.execution.get.response",
+      payload: { requestId: "query-1", execution: null, error: null },
+    },
+  ]);
+});
+
+test.each([
+  { state: "archived", error: "agent_archived", expectedLiveLookups: 0 },
+  { state: "running", error: "agent_busy", expectedLiveLookups: 4 },
+  { state: "permission", error: "agent_busy", expectedLiveLookups: 4 },
+])(
+  "reject send leaves no pending receipt for $state recipients",
+  async ({ state, error, expectedLiveLookups }) => {
+    const receiptDirectory = mkdtempSync(join(tmpdir(), "paseo-reject-receipt-"));
+    try {
+      const messages: SessionOutboundMessage[] = [];
+      const stored = createStoredAgentRecord({
+        id: "agent-1",
+        cwd: "/project",
+        title: "Coordinator",
+        archivedAt: state === "archived" ? "2026-10-12T12:00:00.000Z" : null,
+      });
+      let liveLookups = 0;
+      const session = createSessionForTest({
+        messages,
+        messageReceipts: new MessageReceipts(receiptDirectory),
+        agentStorage: { get: async () => stored, list: async () => [stored] },
+        agentManager: {
+          waitForAgentClose: async () => {},
+          getAgent: () => {
+            liveLookups++;
+            return {
+              id: stored.id,
+              pendingPermissions: new Map(state === "permission" ? [["permission-1", {}]] : []),
+            };
+          },
+          hasInFlightRun: () => state === "running",
+        },
+      });
+      // A refused notification can be retried with the same message ID later.
+      for (const requestId of ["first", "retry"]) {
+        await session.handleMessage({
+          type: "send_agent_message_request",
+          requestId,
+          agentId: stored.id,
+          messageId: "notification-1",
+          text: "Execution metadata is ready",
+          activeTurnBehavior: "reject",
+        });
+        expect(messages).toContainEqual({
+          type: "send_agent_message_response",
+          payload: { requestId, agentId: stored.id, accepted: false, error },
+        });
+        expect(readdirSync(receiptDirectory)).toEqual([]);
+      }
+      expect(liveLookups).toBe(expectedLiveLookups);
+    } finally {
+      rmSync(receiptDirectory, { recursive: true, force: true });
+    }
+  },
+);

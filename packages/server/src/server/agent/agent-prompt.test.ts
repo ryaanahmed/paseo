@@ -16,7 +16,11 @@ import { join } from "node:path";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
-import { setupFinishNotification, waitForAgentRunStartWithTimeout } from "./agent-prompt.js";
+import {
+  startAgentRun,
+  setupFinishNotification,
+  waitForAgentRunStartWithTimeout,
+} from "./agent-prompt.js";
 import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
 import type {
   AgentClient,
@@ -861,3 +865,27 @@ test("a human pasting an agent envelope stays a human message through provider r
     clientMessageId: "human-submission",
   });
 });
+it.each(["running", "permission"])(
+  "reject notification admission preserves %s work",
+  async (reason) => {
+    const manager = {
+      getAgent: () => ({
+        pendingPermissions: new Map(reason === "permission" ? [["permission", {}]] : []),
+      }),
+      hasInFlightRun: () => reason === "running",
+      tryRunOutOfBand: () => false,
+      replaceAgentRun: vi.fn(),
+      steerOrReplaceActiveTurn: vi.fn(),
+      streamAgent: vi.fn(),
+    };
+    await expect(
+      startAgentRun(manager as unknown as AgentManager, "recipient", "notice", createTestLogger(), {
+        activeTurnBehavior: "reject",
+        replaceRunning: true,
+      }),
+    ).rejects.toThrow("agent_busy");
+    expect(manager.replaceAgentRun).not.toHaveBeenCalled();
+    expect(manager.steerOrReplaceActiveTurn).not.toHaveBeenCalled();
+    expect(manager.streamAgent).not.toHaveBeenCalled();
+  },
+);
