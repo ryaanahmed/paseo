@@ -2600,6 +2600,43 @@ export class AgentManager {
     });
   }
 
+  private async prepareExecutionRecord(params: {
+    agent: ActiveManagedAgent;
+    pendingRun: PendingForegroundRun;
+    clientMessageId?: string;
+  }): Promise<AgentExecutionStore | undefined> {
+    const { agent, pendingRun, clientMessageId } = params;
+    const agentId = agent.id;
+    // Disposable daemon helpers leave no durable provider or execution records.
+    const executionStore = agent.internal ? undefined : this.executionStore;
+    if (!executionStore) return undefined;
+
+    const startedAt = new Date().toISOString();
+    try {
+      await executionStore.create({
+        agentId,
+        executionId: pendingRun.token,
+        provider: agent.provider,
+        providerSessionId: agent.session.describePersistence()?.sessionId,
+        turnId: null,
+        clientMessageId,
+        status: "starting",
+        startedAt,
+        updatedAt: startedAt,
+      });
+      // This binding outlives the stream observer and its foreground waiter.
+      this.activeExecutions.set(agentId, {
+        executionId: pendingRun.token,
+        turnId: null,
+        session: agent.session,
+      });
+    } catch (error) {
+      this.runs.settleForegroundRun(agentId, pendingRun.token);
+      throw error;
+    }
+    return executionStore;
+  }
+
   private async startPendingForegroundTurn(params: {
     agent: ActiveManagedAgent;
     agentId: string;
@@ -2608,43 +2645,23 @@ export class AgentManager {
     options?: AgentRunOptions;
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
-    if (this.executionStore) {
-      const startedAt = new Date().toISOString();
-      try {
-        await this.executionStore.create({
-          agentId,
-          executionId: pendingRun.token,
-          provider: agent.provider,
-          providerSessionId: agent.session.describePersistence()?.sessionId,
-          turnId: null,
-          clientMessageId: options?.clientMessageId,
-          status: "starting",
-          startedAt,
-          updatedAt: startedAt,
-        });
-        // This binding outlives the stream observer and its foreground waiter.
-        this.activeExecutions.set(agentId, {
-          executionId: pendingRun.token,
-          turnId: null,
-          session: agent.session,
-        });
-      } catch (error) {
-        this.runs.settleForegroundRun(agentId, pendingRun.token);
-        throw error;
-      }
-    }
+    const executionStore = await this.prepareExecutionRecord({
+      agent,
+      pendingRun,
+      clientMessageId: options?.clientMessageId,
+    });
     try {
       if (pendingRun.settled) {
-        await this.executionStore?.update(agentId, pendingRun.token, {
+        await executionStore?.update(agentId, pendingRun.token, {
           status: "unknown",
           errorCode: "run_settled_before_start",
         });
         throw new Error(`Agent ${agentId} run was settled before its turn started`);
       }
       const result = await agent.session.startTurn(prompt, options);
-      if (this.executionStore) {
+      if (executionStore) {
         const providerSessionId = agent.session.describePersistence()?.sessionId;
-        await this.executionStore.update(agentId, pendingRun.token, {
+        await executionStore.update(agentId, pendingRun.token, {
           status: "running",
           turnId: result.turnId,
           ...(providerSessionId ? { providerSessionId } : {}),
@@ -2658,8 +2675,8 @@ export class AgentManager {
       return result.turnId;
     } catch (error) {
       // A rejected provider call can have lost its acknowledgement after acceptance.
-      if (this.executionStore) {
-        await this.executionStore.update(agentId, pendingRun.token, {
+      if (executionStore) {
+        await executionStore.update(agentId, pendingRun.token, {
           status: "unknown",
           errorCode: "provider_acceptance_unknown",
         });

@@ -316,12 +316,13 @@ async function resolveSessionCreateAgent(
   };
 }
 
-async function resolveMcpCreateAgent(
+// Resolve launch policy before workspace placement or provider configuration.
+function resolveMcpProfileConfig(
   dependencies: CreateAgentCommandDependencies,
   input: CreateAgentFromMcpInput,
-): Promise<ResolvedCreateAgent> {
+) {
   const explicitProvider = input.provider ? resolveProviderModel(input.provider) : undefined;
-  const profileConfig = resolveAgentProfile(
+  return resolveAgentProfile(
     {
       ...input.config,
       ...(explicitProvider
@@ -333,6 +334,13 @@ async function resolveMcpCreateAgent(
     },
     dependencies.getAgentProfiles?.() ?? [],
   );
+}
+
+async function resolveMcpCreateAgent(
+  dependencies: CreateAgentCommandDependencies,
+  input: CreateAgentFromMcpInput,
+): Promise<ResolvedCreateAgent> {
+  const profileConfig = resolveMcpProfileConfig(dependencies, input);
   input = { ...input, config: profileConfig };
   const resolvedProviderModel = { provider: profileConfig.provider, model: profileConfig.model };
   const provider = resolvedProviderModel.provider;

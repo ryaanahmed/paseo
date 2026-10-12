@@ -1730,6 +1730,53 @@ test.each(["completed", "failed", "canceled"] as const)(
   },
 );
 
+test.each(["completed", "rejected"] as const)(
+  "internal helper %s turns leave no durable execution records",
+  async (outcome) => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-internal-execution-"));
+    const executionDirectory = join(directory, "executions");
+    const executionStore = new AgentExecutionStore(executionDirectory);
+    const create = vi.spyOn(executionStore, "create");
+    const update = vi.spyOn(executionStore, "update");
+    class InternalSession extends TestAgentSession {
+      override async startTurn(): Promise<{ turnId: string }> {
+        if (outcome === "rejected") throw new Error("internal provider rejected");
+        this.pushEvent({ type: "turn_completed", provider: "codex", turnId: "internal-turn" });
+        return { turnId: "internal-turn" };
+      }
+    }
+    const client = new (class extends TestAgentClient {
+      override async createSession(config: AgentSessionConfig) {
+        return new InternalSession(config);
+      }
+    })();
+    const manager = new AgentManager({ executionStore, clients: { codex: client }, logger });
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: directory, internal: true },
+      undefined,
+      { workspaceId: undefined },
+    );
+    try {
+      const run = drainAsyncGenerator(
+        manager.streamAgent(agent.id, "private helper task", { clientMessageId: "internal-task" }),
+      );
+      if (outcome === "rejected") await expect(run).rejects.toThrow("internal provider rejected");
+      else await run;
+      await manager.archiveAgent(agent.id);
+      expect(create).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+      const restarted = new AgentExecutionStore(executionDirectory);
+      expect(
+        await restarted.get(agent.id, { kind: "submission", clientMessageId: "internal-task" }),
+      ).toBeNull();
+      expect(manager.getRetiredInternalAgent(agent.id)).not.toBeNull();
+    } finally {
+      if (manager.getAgent(agent.id)) await manager.closeAgent(agent.id);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
 test("durable execution keeps rejected provider acceptance unknown", async () => {
   const directory = mkdtempSync(join(tmpdir(), "agent-execution-rejection-"));
   class RejectedSession extends TestAgentSession {
@@ -1769,7 +1816,17 @@ test("durable execution keeps rejected provider acceptance unknown", async () =>
 
 test("durable execution isolates predecessor events and leaves steers without a primary mapping", async () => {
   const directory = mkdtempSync(join(tmpdir(), "agent-execution-successor-"));
-  const session = new SteeringTestSession({ provider: "codex", cwd: directory });
+  // Emit the provider start before this test can submit its terminal event.
+  // The manager's first yielded event acknowledges admission independently of provider events.
+  class OrderedSteeringSession extends SteeringTestSession {
+    override async startTurn(prompt: AgentPromptInput): Promise<{ turnId: string }> {
+      this.startPrompts.push(prompt);
+      const turnId = `active-turn-${++this.startCount}`;
+      this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
+      return { turnId };
+    }
+  }
+  const session = new OrderedSteeringSession({ provider: "codex", cwd: directory });
   const client = new (class extends TestAgentClient {
     override async createSession() {
       return session;
