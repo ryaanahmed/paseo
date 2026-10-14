@@ -317,6 +317,54 @@ async function emitTimelineResponse(options?: {
 }
 
 describe("wire compatibility", () => {
+  test("projects background updates only to explicitly capable clients", async () => {
+    const project = createPersistedProjectRecord({
+      projectId: "hidden-project",
+      rootPath: "/tmp/worker-project",
+      kind: "git",
+      displayName: "Worker",
+      createdAt: "2026-10-14T00:00:00.000Z",
+      updatedAt: "2026-10-14T00:00:00.000Z",
+      background: true,
+    });
+    const normalMessages: SessionOutboundMessage[] = [];
+    const inclusiveMessages: SessionOutboundMessage[] = [];
+    const normal = createSessionForWireCompatTest({
+      clientCapabilities: { [CLIENT_CAPS.projectUpdates]: true },
+      messages: normalMessages,
+    });
+    const inclusive = createSessionForWireCompatTest({
+      clientCapabilities: {
+        [CLIENT_CAPS.projectUpdates]: true,
+        [CLIENT_CAPS.backgroundProjects]: true,
+      },
+      messages: inclusiveMessages,
+    });
+    await normal.emitProjectUpdate({ kind: "upsert", project });
+    await inclusive.emitProjectUpdate({ kind: "upsert", project });
+    expect(normalMessages).toMatchObject([
+      {
+        type: "project.update",
+        payload: { kind: "remove", projectId: project.projectId },
+      },
+    ]);
+    expect(inclusiveMessages).toMatchObject([
+      {
+        type: "project.update",
+        payload: { kind: "upsert", project: { background: true } },
+      },
+    ]);
+    expect(inclusiveMessages[0]).toMatchObject({
+      payload: { generation: expect.stringMatching(/:background$/) },
+    });
+
+    await normal.emitProjectUpdate({ kind: "upsert", project: { ...project, background: false } });
+    expect(normalMessages.at(-1)).toMatchObject({
+      type: "project.update",
+      payload: { kind: "upsert", project: { projectId: project.projectId } },
+    });
+  });
+
   test("sends project updates only to clients that declare support", async () => {
     const project = createPersistedProjectRecord({
       projectId: "project-1",

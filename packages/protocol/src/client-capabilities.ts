@@ -29,6 +29,8 @@ export const CLIENT_CAPS = {
   projectedSubagentTimeline: "projected_subagent_timeline",
   // COMPAT(projectUpdates): added in v0.1.109, remove gate after 2027-01-15.
   projectUpdates: "project_updates",
+  // Opt into complete project events; background visibility is projected by the client.
+  backgroundProjects: "background_projects",
   // COMPAT(compactProviderSnapshots): added in v0.2.X. Capable clients receive
   // provider catalogs with shared thinking sets and may revalidate by content hash.
   // Remove the legacy snapshot encoding after 2027-02-04.

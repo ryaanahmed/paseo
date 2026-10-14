@@ -800,6 +800,42 @@ test("project.list.request catches up by sequence on the existing RPC", async ()
   });
 });
 
+test("project.list.request hides background parents without narrowing the shared directory", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const records = [false, true].map((background) =>
+    createPersistedProjectRecord({
+      projectId: background ? "background-project" : "empty-project",
+      rootPath: background ? "/repo/worker" : "/repo/empty",
+      kind: "git",
+      displayName: background ? "Worker" : "Empty",
+      background,
+      createdAt: "2026-10-14T00:00:00.000Z",
+      updatedAt: "2026-10-14T00:00:00.000Z",
+    }),
+  );
+  const session = createSessionForWorkspaceTests({ onMessage: (message) => emitted.push(message) });
+  session.projectRegistry.list = async () => records;
+  for (const sync of [undefined, {}]) {
+    await session.handleMessage({ type: "project.list.request", requestId: "normal", sync });
+    expect(
+      filterByType(emitted, "project.list.response")
+        .at(-1)
+        ?.payload.projects.map((p) => p.projectId),
+    ).toEqual(["empty-project"]);
+    await session.handleMessage({
+      type: "project.list.request",
+      requestId: "inclusive",
+      sync,
+      includeBackground: true,
+    });
+    expect(
+      filterByType(emitted, "project.list.response")
+        .at(-1)
+        ?.payload.projects.map((p) => p.projectId),
+    ).toEqual(["empty-project", "background-project"]);
+  }
+});
+
 test("agent updates preserve queued live transitions across stored metadata reads", async () => {
   const running = makeManagedAgent({
     id: "agent-coherent",

@@ -89,4 +89,44 @@ describe("DirectorySyncService", () => {
       headSeq: 1,
     });
   });
+  test("keeps background projects in the canonical collection across scoped reads and live projection", () => {
+    const service = new DirectorySyncService("generation");
+    const hidden = { ...project("worker", "Worker"), background: true };
+    const visible = project("human", "Human");
+    const snapshot = [hidden, visible];
+    const normal = service.synchronizeProjects(snapshot, {});
+    expect(normal.projects.map((entry) => entry.projectId)).toEqual(["human"]);
+    expect(normal.sync.removals).toEqual([{ id: "worker", seq: 1 }]);
+    const inclusive = service.synchronizeProjects(snapshot, normal.sync, true);
+    expect(inclusive.projects.map((entry) => entry.projectId)).toEqual(["worker", "human"]);
+    expect(inclusive.sync).toMatchObject({ generation: "generation:background", mode: "snapshot" });
+    const unchanged = service.synchronizeProjects(snapshot, {
+      generation: normal.sync.generation,
+      afterSeq: normal.sync.headSeq,
+    });
+    expect(unchanged.projects).toEqual([]);
+    expect(unchanged.sync.removals).toEqual([]);
+
+    const update = service.sequenceProjectUpdate({ kind: "upsert", project: hidden }, true);
+    expect(service.projectUpdateForScope(update, false)).toEqual({
+      kind: "remove",
+      projectId: "worker",
+      seq: 1,
+      generation: "generation",
+    });
+    expect(service.projectUpdateForScope(update, true)).toMatchObject({
+      kind: "upsert",
+      project: hidden,
+      seq: 1,
+      generation: "generation:background",
+    });
+    const promoted = { ...hidden, background: false };
+    service.sequenceProjectUpdate({ kind: "upsert", project: promoted }, true);
+    const changes = service.synchronizeProjects([promoted, visible], {
+      generation: normal.sync.generation,
+      afterSeq: normal.sync.headSeq,
+    });
+    expect(changes.projects).toEqual([{ ...promoted, syncSeq: 3 }]);
+    expect(changes.sync.removals).toEqual([]);
+  });
 });

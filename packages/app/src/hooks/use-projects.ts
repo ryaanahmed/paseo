@@ -1,3 +1,4 @@
+import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import equal from "fast-deep-equal";
 import { useStoreWithEqualityFn } from "zustand/traditional";
@@ -52,6 +53,7 @@ export interface UseProjectsResult {
 
 export interface UseProjectsOptions {
   enabled?: boolean;
+  includeBackground?: boolean;
 }
 
 const EMPTY_PROJECT_HOST_REPLICAS: ProjectHostReplica[] = [];
@@ -95,6 +97,7 @@ function selectProjectHostReplicas(
 export function deriveProjectsFromReplica(input: {
   replicas: readonly ProjectHostReplica[];
   runtimeStates: readonly ProjectHostRuntimeState[];
+  includeBackground?: boolean;
 }): DerivedProjectsResult {
   const runtimeByServerId = new Map(
     input.runtimeStates.map((state) => [state.serverId, state] as const),
@@ -123,7 +126,7 @@ export function deriveProjectsFromReplica(input: {
   });
 
   return {
-    ...buildProjects({ hosts }),
+    ...buildProjects({ hosts, includeBackground: input.includeBackground ?? false }),
     hostErrors,
     isLoading: input.runtimeStates.some((state) => state.isLoading),
     isFetching: input.runtimeStates.some((state) => state.isFetching),
@@ -162,6 +165,8 @@ function useProjectHostRuntimeStates(
 
 export function useProjects(options: UseProjectsOptions = {}): UseProjectsResult {
   const enabled = options.enabled ?? true;
+  const showBackground = useSidebarViewStore((state) => state.showBackground);
+  const includeBackground = options.includeBackground ?? showBackground;
   const hosts = useHosts();
   const runtime = getHostRuntimeStore();
   const serverIds = useMemo(
@@ -179,8 +184,8 @@ export function useProjects(options: UseProjectsOptions = {}): UseProjectsResult
   const replicas = useStoreWithEqualityFn(useSessionStore, replicaSelector, equal);
   const runtimeStates = useProjectHostRuntimeStates(serverIds, enabled);
   const derived = useMemo(
-    () => deriveProjectsFromReplica({ replicas, runtimeStates }),
-    [replicas, runtimeStates],
+    () => deriveProjectsFromReplica({ replicas, runtimeStates, includeBackground }),
+    [replicas, runtimeStates, includeBackground],
   );
   const refetch = useCallback(() => {
     if (!enabled) return;

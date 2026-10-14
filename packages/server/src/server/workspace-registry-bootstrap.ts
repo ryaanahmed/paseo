@@ -61,6 +61,21 @@ export async function bootstrapWorkspaceRegistries(options: {
 
   await Promise.all([options.projectRegistry.initialize(), options.workspaceRegistry.initialize()]);
 
+  // COMPAT(projectBackground): added 2026-10-14; remove backfill after 2027-04-14.
+  // Archived worker history still identifies a disposable project. Preserve every
+  // explicit visibility decision, and leave projects without worker history visible.
+  const workspaceHistory = await options.workspaceRegistry.list();
+  for (const project of await options.projectRegistry.list()) {
+    if (project.background !== undefined) continue;
+    const history = workspaceHistory.filter(
+      (workspace) => workspace.projectId === project.projectId,
+    );
+    const background = history.length > 0 && history.every((workspace) => workspace.background);
+    await options.projectRegistry.update(project.projectId, (current) =>
+      current.background === undefined ? { ...current, background } : current,
+    );
+  }
+
   // COMPAT(worktree-branch-identity): added in v0.4.0 on 2026-08-15; remove after
   // 2027-02-15. Older worktrees did not pin branch-off/check-out branch identity.
   // Seed it from the registry value clients already display, never from live Git.

@@ -20,6 +20,8 @@ const UntrustedWorkspaceSourceSchema = z.object({
 });
 
 const PersistedProjectRecordSchema = z.object({
+  // Absence identifies legacy records until workspace-history backfill runs.
+  background: z.boolean().optional(),
   projectId: z.string(),
   rootPath: z.string(),
   kind: z.enum(["git", "non_git"]),
@@ -140,6 +142,7 @@ export interface ProjectRegistry {
     kind: PersistedProjectKind;
     displayName: string;
     projectKey?: string;
+    background?: boolean;
     timestamp: string;
   }): Promise<PersistedProjectRecord>;
   upsert(record: PersistedProjectRecord): Promise<void>;
@@ -410,6 +413,7 @@ export class FileBackedProjectRegistry
     kind: PersistedProjectKind;
     displayName: string;
     projectKey?: string;
+    background?: boolean;
     timestamp: string;
   }): Promise<PersistedProjectRecord> {
     const previous = this.allocationQueue;
@@ -427,10 +431,16 @@ export class FileBackedProjectRegistry
             left.projectId.localeCompare(right.projectId),
         )[0];
       if (active) {
-        if (active.kind === input.kind && active.projectKey === (input.projectKey ?? null))
+        const background = active.background === true && input.background === true;
+        if (
+          active.kind === input.kind &&
+          active.projectKey === (input.projectKey ?? null) &&
+          active.background === background
+        )
           return active;
         const refreshed = {
           ...active,
+          background,
           kind: input.kind,
           projectKey: input.projectKey ?? null,
           updatedAt: input.timestamp,
@@ -448,6 +458,7 @@ export class FileBackedProjectRegistry
           kind: input.kind,
           displayName: input.displayName,
           projectKey: input.projectKey ?? null,
+          background: input.background ?? false,
           createdAt: input.timestamp,
           updatedAt: input.timestamp,
         });
@@ -471,15 +482,27 @@ export class FileBackedProjectRegistry
   }
 
   override async upsert(record: PersistedProjectRecord): Promise<void> {
-    await super.upsert(record);
-    await this.notifyMutation({ kind: "upsert", projectId: record.projectId, project: record });
+    // A foreground project stays visible even if a concurrent metadata refresh is stale.
+    const project = await this.mutateCache((records) => {
+      const existing = records.get(record.projectId);
+      const next = PersistedProjectRecordSchema.parse({
+        ...record,
+        ...(existing?.background === false ? { background: false } : {}),
+      });
+      records.set(record.projectId, next);
+      return next;
+    });
+    await this.notifyMutation({ kind: "upsert", projectId: project.projectId, project });
   }
 
   override async update(
     projectId: string,
     updater: (record: PersistedProjectRecord) => PersistedProjectRecord,
   ): Promise<PersistedProjectRecord | null> {
-    const project = await super.update(projectId, updater);
+    const project = await super.update(projectId, (existing) => ({
+      ...updater(existing),
+      ...(existing.background === false ? { background: false } : {}),
+    }));
     if (!project) return null;
     await this.notifyMutation({ kind: "upsert", projectId, project });
     return project;
@@ -643,6 +666,7 @@ export class FileBackedWorkspaceRegistry
 }
 
 export function createPersistedProjectRecord(input: {
+  background?: boolean;
   projectId: string;
   rootPath: string;
   kind: PersistedProjectKind;
@@ -656,6 +680,7 @@ export function createPersistedProjectRecord(input: {
 }): PersistedProjectRecord {
   return PersistedProjectRecordSchema.parse({
     ...input,
+    background: input.background ?? false,
     customName: input.customName ?? null,
     projectKey: input.projectKey ?? null,
     customIconRevision: input.customIconRevision ?? null,

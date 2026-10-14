@@ -741,10 +741,15 @@ export class DirectorySync {
     transaction: DirectoryTransaction<WorkspaceRefreshSnapshot, WorkspaceDirectoryDelta>,
     supportsDirectorySync: boolean,
   ): Promise<void> {
-    const payload = await client.listProjects(
-      supportsDirectorySync
+    const includeBackground = client.supportsBackgroundProjects();
+    const options = {
+      ...(supportsDirectorySync
         ? { sync: transaction.snapshot.requestCursors.projects ?? {} }
-        : undefined,
+        : {}),
+      ...(includeBackground ? { includeBackground: true } : {}),
+    };
+    const payload = await client.listProjects(
+      supportsDirectorySync || includeBackground ? options : undefined,
     );
     this.assertWorkspaceTransactionCurrent(client, source, transaction);
     if (payload.sync?.mode !== "changes") transaction.snapshot.projects.clear();

@@ -28,6 +28,26 @@ function runtimeState(input: Partial<ProjectHostRuntimeState> & { serverId: stri
 }
 
 describe("deriveProjectsFromReplica", () => {
+  it("hides background projects by default while keeping empty foreground projects", () => {
+    const replicas: ProjectHostReplica[] = [
+      {
+        serverId: "local",
+        serverName: "Local",
+        workspaces: [],
+        projects: [
+          project("foreground", "acme/app", "/repo/app"),
+          { ...project("worker", "acme/worker", "/repo/worker"), background: true },
+        ],
+      },
+    ];
+    const input = { replicas, runtimeStates: [runtimeState({ serverId: "local" })] };
+    const visible = deriveProjectsFromReplica(input);
+    const complete = deriveProjectsFromReplica({ ...input, includeBackground: true });
+    expect(visible.projects.map((entry) => entry.hosts[0]?.projectId)).toEqual(["foreground"]);
+    expect(complete.projects).toHaveLength(2);
+    expect(replicas[0]?.projects).toHaveLength(2);
+  });
+
   it("derives projects from the project descriptor replica", () => {
     const replicas: ProjectHostReplica[] = [
       {

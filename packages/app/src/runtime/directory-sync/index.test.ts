@@ -33,6 +33,12 @@ type ProjectListResult = Awaited<ReturnType<DaemonClient["listProjects"]>>;
 type AgentFetchResult = Awaited<ReturnType<DaemonClient["fetchAgents"]>>;
 
 class FakeDirectoryClient {
+  backgroundProjects = false;
+
+  supportsBackgroundProjects(): boolean {
+    return this.backgroundProjects;
+  }
+
   supportsBackgroundWorkspaces(): boolean {
     return false;
   }
@@ -271,6 +277,40 @@ afterEach(() => {
 });
 
 describe("DirectorySync session readiness", () => {
+  it.each([false, true])("retains background projects when support is %s", async (supported) => {
+    const serverId = `background-projects-${supported}`;
+    const { client, directory } = createDirectory(serverId);
+    client.backgroundProjects = supported;
+    const store = useSessionStore.getState();
+    store.initializeSession(serverId, client as unknown as DaemonClient, 1);
+    store.updateSessionServerInfo(serverId, {
+      serverId,
+      hostname: null,
+      version: "test",
+      features: { projectList: true },
+    });
+    client.projectResult = {
+      requestId: "projects",
+      projects: [
+        {
+          projectId: "worker",
+          projectDisplayName: "Worker",
+          projectRootPath: "/repo/worker",
+          projectKind: "git",
+          background: true,
+        },
+      ],
+    };
+
+    await directory.refreshWorkspaces();
+
+    expect(client.lastProjectOptions).toEqual(supported ? { includeBackground: true } : undefined);
+    expect(useSessionStore.getState().sessions[serverId]?.projects.get("worker")?.background).toBe(
+      true,
+    );
+    directory.dispose();
+  });
+
   it("restores the cached directory before network demand", async () => {
     const serverId = "offline-cached-directory";
     serverIds.add(serverId);

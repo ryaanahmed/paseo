@@ -198,7 +198,10 @@ export function createWorkspaceProvisioningService(deps: {
     }
   }
 
-  async function findOrCreateProjectForDirectory(cwd: string): Promise<PersistedProjectRecord> {
+  async function findOrCreateProjectForDirectory(
+    cwd: string,
+    background = false,
+  ): Promise<PersistedProjectRecord> {
     const rootPath = resolve(cwd);
     const checkout = await workspaceGitService.getCheckout(rootPath);
     const timestamp = new Date().toISOString();
@@ -213,6 +216,7 @@ export function createWorkspaceProvisioningService(deps: {
         mainRepoRoot: checkout.mainRepoRoot,
         serverId,
       }),
+      background,
       timestamp,
     });
   }
@@ -222,6 +226,20 @@ export function createWorkspaceProvisioningService(deps: {
     if (!project) throw new WorkspaceProvisioningError("unknown_project", projectId);
     if (project.archivedAt) throw new WorkspaceProvisioningError("archived_project", projectId);
     return project;
+  }
+
+  async function applyProjectIntent(
+    project: PersistedProjectRecord,
+    background: boolean,
+  ): Promise<PersistedProjectRecord> {
+    if (background || project.background === false) return project;
+    return (
+      (await projectRegistry.update(project.projectId, (current) => ({
+        ...current,
+        background: false,
+        updatedAt: new Date().toISOString(),
+      }))) ?? project
+    );
   }
 
   async function resolveBackground(input?: {
@@ -248,10 +266,14 @@ export function createWorkspaceProvisioningService(deps: {
   ): Promise<PersistedWorkspaceRecord> {
     const normalizedCwd = resolve(cwd);
     const checkout = await workspaceGitService.getCheckout(normalizedCwd);
+    const background = await resolveBackground(context);
     const project = projectId
-      ? await refreshProjectKind(await requireActiveProject(projectId), normalizedCwd, checkout)
+      ? await applyProjectIntent(
+          await refreshProjectKind(await requireActiveProject(projectId), normalizedCwd, checkout),
+          background,
+        )
       : // COMPAT(workspaceCreateMissingProjectId): added in v0.1.107, remove after 2027-01-15.
-        await findOrCreateProjectForDirectory(normalizedCwd);
+        await findOrCreateProjectForDirectory(normalizedCwd, background);
     const timestamp = new Date().toISOString();
     const workspace = createPersistedWorkspaceRecord({
       workspaceId: context?.workspaceId ?? generateWorkspaceId(),
@@ -260,7 +282,7 @@ export function createWorkspaceProvisioningService(deps: {
       title: title?.trim() || null,
       createdAt: timestamp,
       updatedAt: timestamp,
-      background: await resolveBackground(context),
+      background,
     });
     await workspaceRegistry.upsert(workspace, {
       expectsInitialAgent: context?.expectsInitialAgent,
@@ -276,10 +298,12 @@ export function createWorkspaceProvisioningService(deps: {
     const repoRoot = resolve(input.repoRoot);
     const cwd = resolve(input.cwd);
     const worktreeRoot = resolve(input.worktreeRoot);
+    const background = await resolveBackground(input);
     const project = await resolveSourceProjectForWorktree({
       sourceCwd,
       projectId: input.projectId,
       repoRoot,
+      background,
     });
     const timestamp = new Date().toISOString();
     const workspace = createPersistedWorkspaceRecord({
@@ -297,7 +321,7 @@ export function createWorkspaceProvisioningService(deps: {
       createdAt: timestamp,
       updatedAt: timestamp,
       ...(input.untrustedSource ? { untrustedSource: input.untrustedSource } : {}),
-      background: await resolveBackground(input),
+      background,
     });
     await workspaceRegistry.upsert(workspace, {
       expectsInitialAgent: input.expectsInitialAgent,
@@ -314,9 +338,13 @@ export function createWorkspaceProvisioningService(deps: {
     sourceCwd: string;
     projectId?: string;
     repoRoot: string;
+    background: boolean;
   }): Promise<PersistedProjectRecord> {
     if (input.projectId) {
-      return refreshProjectKind(await requireActiveProject(input.projectId));
+      return applyProjectIntent(
+        await refreshProjectKind(await requireActiveProject(input.projectId)),
+        input.background,
+      );
     }
 
     const workspaces = await workspaceRegistry.list();
@@ -329,7 +357,7 @@ export function createWorkspaceProvisioningService(deps: {
       );
     if (sourceWorkspace) {
       const project = await projectRegistry.get(sourceWorkspace.projectId);
-      if (project) return refreshProjectKind(project);
+      if (project) return applyProjectIntent(await refreshProjectKind(project), input.background);
       // COMPAT(worktreeMissingSourceProject): added in v0.1.107, remove after 2027-01-15.
       // Orphaned legacy workspace FKs fall through to exact-root allocation.
     }
@@ -346,6 +374,7 @@ export function createWorkspaceProvisioningService(deps: {
         mainRepoRoot: checkout.mainRepoRoot,
         serverId,
       }),
+      background: input.background,
       timestamp: new Date().toISOString(),
     });
     return refreshProjectKind(project);

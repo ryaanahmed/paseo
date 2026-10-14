@@ -2618,6 +2618,9 @@ export class DaemonClient {
     const message = SessionInboundMessageSchema.parse({
       type: "project.list.request",
       requestId: resolvedRequestId,
+      ...(typeof options === "object" && options.includeBackground
+        ? { includeBackground: true }
+        : {}),
       ...(typeof options === "object" && options.sync ? { sync: options.sync } : {}),
     });
     return this.sendRequest({
@@ -2904,6 +2907,10 @@ export class DaemonClient {
     if (this.lastServerInfoMessage?.features?.backgroundWorkspaces !== true) {
       throw new Error("Update the host to use background workspaces.");
     }
+  }
+
+  supportsBackgroundProjects(): boolean {
+    return this.lastServerInfoMessage?.features?.backgroundProjects === true;
   }
 
   supportsBackgroundWorkspaces(): boolean {

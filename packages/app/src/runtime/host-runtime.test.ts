@@ -52,6 +52,10 @@ it("requests the managed connection credential through desktop main without a we
 });
 
 class FakeDaemonClient {
+  supportsBackgroundProjects(): boolean {
+    return false;
+  }
+
   supportsBackgroundWorkspaces(): boolean {
     return false;
   }

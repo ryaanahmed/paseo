@@ -57,12 +57,42 @@ export class DirectorySyncService {
   synchronizeProjects(
     snapshot: Iterable<WorkspaceProjectDescriptorPayload>,
     cursor: DirectorySyncCursor,
+    includeBackground = false,
   ): Pick<ProjectListResponse, "projects" | "sync"> {
     this.projects.replaceAll(snapshot);
-    const read = this.read(this.projects, cursor);
+    const read = this.read(this.projects, cursor, includeBackground);
+    // Keep the shared collection complete; hidden updates remove stale visible replicas.
+    const hidden = includeBackground ? [] : read.values.filter(({ value }) => value.background);
+    const projects: ProjectListResponse["projects"] = [];
+    for (const { seq, value } of read.values) {
+      if (includeBackground || !value.background) projects.push({ ...value, syncSeq: seq });
+    }
     return {
-      projects: read.values.map(({ seq, value }) => ({ ...value, syncSeq: seq })),
-      sync: this.metadata(read),
+      projects,
+      sync: {
+        ...this.metadata(read, includeBackground),
+        removals: [
+          ...read.removals,
+          ...hidden.map(({ seq, value }) => ({ id: value.projectId, seq })),
+        ],
+      },
+    };
+  }
+
+  projectUpdateForScope(
+    update: ProjectUpdate["payload"],
+    includeBackground: boolean,
+  ): ProjectUpdate["payload"] {
+    const visibility =
+      update.kind === "upsert" && update.project.background && !includeBackground
+        ? { kind: "remove" as const, projectId: update.project.projectId }
+        : update;
+    return {
+      ...visibility,
+      ...(update.seq !== undefined ? { seq: update.seq } : {}),
+      ...(update.generation !== undefined
+        ? { generation: this.generationFor(includeBackground) }
+        : {}),
     };
   }
 

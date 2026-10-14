@@ -135,6 +135,7 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   [CLIENT_CAPS.providerSubagents]: true,
   [CLIENT_CAPS.projectedSubagentTimeline]: true,
   [CLIENT_CAPS.projectUpdates]: true,
+  [CLIENT_CAPS.backgroundProjects]: true,
   [CLIENT_CAPS.compactProviderSnapshots]: true,
   [CLIENT_CAPS.providerSnapshotReferences]: true,
   [CLIENT_CAPS.timelineReplacementInvalidation]: true,

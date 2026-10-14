@@ -81,6 +81,51 @@ describe("workspace registries", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test.each([true, false])(
+    "foreground allocation wins concurrent background requests (background first: %s)",
+    async (backgroundFirst) => {
+      const input = {
+        rootPath: "/tmp/worker",
+        kind: "git" as const,
+        displayName: "worker",
+        timestamp: "2026-10-14T00:00:00.000Z",
+      };
+      const mutations: Array<boolean | undefined> = [];
+      projectRegistry.subscribeToMutations((mutation) => {
+        mutations.push(mutation.project?.background);
+      });
+      const requests = [backgroundFirst, !backgroundFirst].map((background) =>
+        projectRegistry.getOrCreateActiveByRoot({ ...input, background }),
+      );
+      const [first, second] = await Promise.all(requests);
+      expect(first.projectId).toBe(second.projectId);
+      expect(mutations[0]).toBe(backgroundFirst);
+      expect((await projectRegistry.get(first.projectId))?.background).toBe(false);
+      await projectRegistry.upsert({ ...first, background: true });
+      await projectRegistry.update(first.projectId, (current) => ({
+        ...current,
+        background: true,
+      }));
+      expect((await projectRegistry.get(first.projectId))?.background).toBe(false);
+    },
+  );
+
+  test("new projects default to foreground while loading legacy records preserves absence", async () => {
+    const project = createPersistedProjectRecord({
+      projectId: "legacy",
+      rootPath: "/tmp/legacy",
+      kind: "non_git",
+      displayName: "legacy",
+      createdAt: "2026-10-14T00:00:00.000Z",
+      updatedAt: "2026-10-14T00:00:00.000Z",
+    });
+    expect(project.background).toBe(false);
+    const { background: _background, ...legacy } = project;
+    await writeJsonFileAtomic(path.join(tmpDir, "projects", "projects.json"), [legacy]);
+    await projectRegistry.initialize();
+    expect((await projectRegistry.get("legacy"))?.background).toBeUndefined();
+  });
+
   test("creates, updates, archives, deletes, and lists project records", async () => {
     await projectRegistry.initialize();
     await projectRegistry.upsert(

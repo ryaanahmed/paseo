@@ -1325,6 +1325,7 @@ export const FetchWorkspacesRequestMessageSchema = z.object({
 export const ProjectListRequestMessageSchema = z.object({
   type: z.literal("project.list.request"),
   requestId: z.string(),
+  includeBackground: z.boolean().optional(),
   // COMPAT(directorySync): added in v0.3.x, remove optional after 2027-02-12.
   sync: DirectorySyncRequestSchema.optional(),
 });
@@ -3601,6 +3602,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(internalWorkspaces): added in v0.9.0; remove gate after 2027-03-17.
         internalWorkspaces: z.boolean().optional(),
         backgroundWorkspaces: z.boolean().optional(),
+        backgroundProjects: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
         usageSources: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
@@ -4239,6 +4241,7 @@ export const FetchRecentProviderSessionsResponseMessageSchema = z.object({
 // workspace is archived.
 export const WorkspaceProjectDescriptorPayloadSchema = z.object({
   projectId: z.string(),
+  background: z.boolean().optional(),
   // COMPAT(projectKey): added in v0.2.4 on 2026-07-28; remove optional after 2027-01-28.
   projectKey: z.string().optional(),
   projectDisplayName: z.string(),
@@ -7589,6 +7592,7 @@ export const WSHelloMessageSchema = z.object({
       [CLIENT_CAPS.terminalReflowableSnapshot]: z.boolean().optional(),
       [CLIENT_CAPS.providerSubagents]: z.boolean().optional(),
       [CLIENT_CAPS.projectUpdates]: z.boolean().optional(),
+      [CLIENT_CAPS.backgroundProjects]: z.boolean().optional(),
       [CLIENT_CAPS.compactProviderSnapshots]: z.boolean().optional(),
       [CLIENT_CAPS.providerSnapshotReferences]: z.boolean().optional(),
       [CLIENT_CAPS.timelineReplacementInvalidation]: z.boolean().optional(),

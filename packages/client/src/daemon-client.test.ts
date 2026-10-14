@@ -3101,6 +3101,36 @@ test("sends worktree target and autoArchive in create_agent_request", async () =
   await expect(createPromise).rejects.toThrow("worktree auto archive sentinel");
 });
 
+test("opts project discovery into background records only when requested", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  mock.triggerOpen({ features: { backgroundProjects: true } });
+  await connected;
+  expect(client.supportsBackgroundProjects()).toBe(true);
+  for (const includeBackground of [false, true]) {
+    mock.sent.length = 0;
+    const result = client.listProjects({ includeBackground });
+    const request = parseSentFrame(mock.sent[0]);
+    expect(request.type).toBe("project.list.request");
+    expect(request.includeBackground).toBe(includeBackground ? true : undefined);
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "project.list.response",
+        payload: { requestId: request.requestId, projects: [] },
+      }),
+    );
+    await expect(result).resolves.toMatchObject({ projects: [] });
+  }
+});
+
 test("sends internal in create_agent_request when the host advertises internal agents", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();

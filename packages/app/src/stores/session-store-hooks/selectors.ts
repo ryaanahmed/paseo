@@ -154,6 +154,7 @@ export function selectWorkspaceDirectoryServerIds(
 export function selectWorkspaceStructureProjects(
   state: SessionsSnapshot,
   serverIds: readonly string[],
+  options: { includeBackground?: boolean } = {},
 ): WorkspaceStructureProject[] {
   const sessions: Array<{
     serverId: string;
@@ -179,11 +180,15 @@ export function selectWorkspaceStructureProjects(
     return EMPTY_WORKSPACE_STRUCTURE.projects;
   }
 
-  return buildWorkspaceStructureProjects({ sessions });
+  return buildWorkspaceStructureProjects({
+    sessions,
+    includeBackground: options.includeBackground,
+  });
 }
 
 export function createWorkspaceStructureProjectsSelector(
   serverIds: readonly string[],
+  options: { includeBackground?: boolean } = {},
 ): (state: SessionsSnapshot) => WorkspaceStructureProject[] {
   let previousInputs: Array<{
     workspaces: Map<string, WorkspaceDescriptor> | undefined;
@@ -209,7 +214,7 @@ export function createWorkspaceStructureProjectsSelector(
     }
 
     previousInputs = inputs;
-    previousProjects = selectWorkspaceStructureProjects(state, serverIds);
+    previousProjects = selectWorkspaceStructureProjects(state, serverIds, options);
     return previousProjects;
   };
 }
@@ -287,6 +292,7 @@ export function selectWorkspaceKeys(state: SessionsSnapshot, serverId: string | 
 export function selectRecommendedProjectPaths(
   state: SessionsSnapshot,
   serverId: string | null,
+  options: { includeBackground?: boolean } = {},
 ): string[] {
   if (!serverId) {
     return EMPTY_WORKSPACE_KEYS;
@@ -295,7 +301,12 @@ export function selectRecommendedProjectPaths(
   if (!workspaces) {
     return EMPTY_WORKSPACE_KEYS;
   }
+  const projects = state.sessions[serverId]?.projects;
   return Array.from(workspaces.values())
+    .filter((workspace) => {
+      if (options.includeBackground) return true;
+      return !workspace.background && !projects?.get(workspace.projectId)?.background;
+    })
     .map((workspace) => workspace.projectRootPath)
     .filter((path) => path.length > 0);
 }

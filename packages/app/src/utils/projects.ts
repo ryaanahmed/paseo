@@ -52,6 +52,7 @@ export interface ProjectHost {
 
 export interface BuildProjectsInput {
   hosts: ProjectHost[];
+  includeBackground?: boolean;
 }
 
 export interface BuildProjectsResult {
@@ -119,9 +120,10 @@ function findProjectMetadata(
   return null;
 }
 
-function buildHostProjectEntries(hosts: ProjectHost[]): HostProjectListItem[] {
+function buildHostProjectEntries(input: BuildProjectsInput): HostProjectListItem[] {
   return buildWorkspaceStructureProjects({
-    sessions: hosts.map((host) => ({
+    includeBackground: input.includeBackground,
+    sessions: input.hosts.map((host) => ({
       serverId: host.serverId,
       projects: host.projects,
       workspaces: host.workspaces,
@@ -275,7 +277,7 @@ function attachHostWorkspaces(
 
 export function buildProjects(input: BuildProjectsInput): BuildProjectsResult {
   const groups = new Map<string, ProjectGroup>();
-  const projectEntries = buildHostProjectEntries(input.hosts);
+  const projectEntries = buildHostProjectEntries(input);
 
   for (const host of input.hosts) {
     const hostProjects = projectEntries.filter((project) =>

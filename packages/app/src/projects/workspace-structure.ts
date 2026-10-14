@@ -44,6 +44,7 @@ interface ProjectDraft {
 /** The single app boundary that turns host-local projects into grouped display projects. */
 export function buildWorkspaceStructureProjects(input: {
   sessions: WorkspaceStructureSession[];
+  includeBackground?: boolean;
 }): WorkspaceStructureProject[] {
   const byProject = new Map<string, ProjectDraft>();
   const projectEntries: Array<{ serverId: string; project: ProjectDescriptor }> = [];
@@ -72,7 +73,9 @@ export function buildWorkspaceStructureProjects(input: {
       allocatedViewKeys,
       serverId,
       project,
+      includeBackground: input.includeBackground ?? true,
     });
+    if (viewKey === null) continue;
     getOrCreate(viewKeyByServerProjectId, serverId, () => new Map()).set(
       project.projectId,
       viewKey,
@@ -147,7 +150,8 @@ function addProjectToView(input: {
   allocatedViewKeys: Set<string>;
   serverId: string;
   project: ProjectDescriptor;
-}): string {
+  includeBackground: boolean;
+}): string | null {
   const { byProject, keyCountsByServer, serverId, project } = input;
   const sharedKey = project.projectKey ?? null;
   const canUseSharedKey =
@@ -155,6 +159,9 @@ function addProjectToView(input: {
   const viewKey = canUseSharedKey
     ? createProjectViewKey({ kind: "equivalence", projectKey: sharedKey })
     : allocatePlacementViewKey(input.allocatedViewKeys, serverId, project.projectId);
+  // Allocate identities from the complete directory so hiding a clone cannot regroup other roots.
+  if (!input.includeBackground && project.background) return null;
+
   const placement: WorkspaceStructureHostPlacement = {
     serverId,
     projectId: project.projectId,

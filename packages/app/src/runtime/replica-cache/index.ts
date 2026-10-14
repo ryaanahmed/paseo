@@ -335,6 +335,7 @@ const StoredWorkspaceSchema = z.strictObject({
 
 const StoredProjectSchema = z.strictObject({
   projectId: z.string(),
+  background: z.boolean().optional(),
   projectKey: z.string().optional(),
   projectDisplayName: z.string(),
   projectCustomName: z.string().nullable(),
@@ -742,6 +743,7 @@ function serializeWorkspace(workspace: WorkspaceDescriptor): StoredWorkspace {
 function serializeProject(project: ProjectDescriptor): StoredProject {
   return {
     projectId: project.projectId,
+    background: project.background ?? false,
     ...(project.projectKey ? { projectKey: project.projectKey } : {}),
     projectDisplayName: project.projectDisplayName,
     projectCustomName: project.projectCustomName,

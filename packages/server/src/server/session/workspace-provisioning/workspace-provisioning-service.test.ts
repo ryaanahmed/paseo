@@ -984,3 +984,61 @@ test("a directory that goes away while the git read is in flight keeps its place
     branch: "feature/vanishing",
   });
 });
+
+test("background intent reaches project publication and foreground creation promotes it", async () => {
+  const cwd = path.join(tmpDir, "worker-project");
+  const mutations: Array<boolean | undefined> = [];
+  projectRegistry.subscribeToMutations((mutation) => {
+    mutations.push(mutation.project?.background);
+  });
+  const background = await provisioning.createWorkspaceForDirectory(cwd, null, undefined, {
+    background: true,
+  });
+  expect(mutations[0]).toBe(true);
+  expect((await projectRegistry.get(background.projectId))?.background).toBe(true);
+  await workspaceRegistry.archive(background.workspaceId, ARCHIVED_AT);
+  expect((await projectRegistry.get(background.projectId))?.background).toBe(true);
+  await provisioning.createWorkspaceForDirectory(cwd, null, background.projectId, {
+    background: false,
+  });
+  expect((await projectRegistry.get(background.projectId))?.background).toBe(false);
+  await provisioning.createWorkspaceForDirectory(cwd, null, background.projectId, {
+    background: true,
+  });
+  expect((await projectRegistry.get(background.projectId))?.background).toBe(false);
+});
+
+test("explicit project opening promotes a worker project", async () => {
+  const cwd = path.join(tmpDir, "worker-project");
+  const worker = await provisioning.createWorkspaceForDirectory(cwd, null, undefined, {
+    background: true,
+  });
+  expect((await provisioning.findOrCreateProjectForDirectory(cwd)).background).toBe(false);
+  expect((await projectRegistry.get(worker.projectId))?.background).toBe(false);
+});
+
+test("background worktree allocation publishes a hidden project", async () => {
+  const root = path.join(tmpDir, "new-worker-repo");
+  const workspace = await provisioning.createWorkspaceForWorktree({
+    sourceCwd: root,
+    repoRoot: root,
+    cwd: `${root}-worker`,
+    worktreeRoot: `${root}-worker`,
+    branch: "worker",
+    baseBranch: "main",
+    title: null,
+    background: true,
+  });
+  expect((await projectRegistry.get(workspace.projectId))?.background).toBe(true);
+  await provisioning.createWorkspaceForWorktree({
+    sourceCwd: root,
+    repoRoot: root,
+    projectId: workspace.projectId,
+    cwd: `${root}-public`,
+    worktreeRoot: `${root}-public`,
+    branch: "public",
+    baseBranch: "main",
+    title: null,
+  });
+  expect((await projectRegistry.get(workspace.projectId))?.background).toBe(false);
+});

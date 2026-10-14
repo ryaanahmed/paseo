@@ -256,6 +256,29 @@ function deleteDirectory(cache: ReplicaCache, serverId: string): void {
 }
 
 describe("ReplicaCache", () => {
+  it("round-trips background project visibility without losing exact project lookup", async () => {
+    const storage = new MemoryStorage();
+    const writer = createCache(storage);
+    const value = directory();
+    value.projects.set(
+      "worker",
+      normalizeProjectDescriptor({
+        projectId: "worker",
+        projectDisplayName: "Worker",
+        projectRootPath: "/repo/worker",
+        projectKind: "git",
+        background: true,
+      }),
+    );
+    commitDirectory(writer, SERVER_ID, value);
+    await writer.flush();
+
+    const restored = await createCache(storage).readDirectory(SERVER_ID);
+    expect(restored.projects.get("worker")?.background).toBe(true);
+    expect(restored.projects.get("project-1")?.background).toBe(false);
+    expect(value.projects.get("worker")?.background).toBe(true);
+  });
+
   it("rejects pre-baseline-fix checkpoints without discarding cached rows or timelines", async () => {
     const storage = new MemoryStorage();
     const writer = createCache(storage);

@@ -176,6 +176,7 @@ export function normalizeWorkspaceDescriptor(
 
 export interface ProjectDescriptor {
   projectId: string;
+  background?: boolean;
   projectKey?: string | null;
   projectDisplayName: string;
   projectCustomName: string | null;
@@ -191,6 +192,7 @@ export function normalizeProjectDescriptor(
   return {
     projectId: payload.projectId,
     projectKey: payload.projectKey ?? null,
+    background: payload.background ?? false,
     projectDisplayName: payload.projectDisplayName,
     projectCustomName: payload.projectCustomName ?? null,
     projectCustomIconRevision: payload.projectCustomIconRevision ?? null,

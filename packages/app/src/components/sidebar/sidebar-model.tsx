@@ -133,9 +133,7 @@ export function SidebarModelProvider({
         const workspaces = project.workspaces.filter((workspace) =>
           visibleWorkspaceKeys.has(workspace.workspaceKey),
         );
-        return workspaces.length > 0 || (!hasActiveLabelFilter && project.workspaces.length === 0)
-          ? [{ ...project, workspaces }]
-          : [];
+        return workspaces.length > 0 || !hasActiveLabelFilter ? [{ ...project, workspaces }] : [];
       });
     }
     return projects;

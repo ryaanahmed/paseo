@@ -5903,6 +5903,7 @@ export class Session {
       projectIconRevision: icon.revision,
       projectRootPath: project.rootPath,
       projectKind: project.kind,
+      ...(project.background ? { background: true } : {}),
     };
   }
 
@@ -6453,13 +6454,17 @@ export class Session {
           .map((project) => this.buildProjectDescriptor(project)),
       );
       const synchronized = request.sync
-        ? this.directorySync.synchronizeProjects(projects, request.sync)
+        ? this.directorySync.synchronizeProjects(projects, request.sync, request.includeBackground)
         : null;
       this.emit({
         type: "project.list.response",
         payload: {
           requestId: request.requestId,
-          ...(synchronized ?? { projects }),
+          ...(synchronized ?? {
+            projects: projects.filter(
+              (project) => request.includeBackground || !project.background,
+            ),
+          }),
         },
       });
     } catch (error) {
@@ -8461,6 +8466,20 @@ export class Session {
     return legacyWantsEvent(event, capabilities);
   }
 
+  private projectMessageForClient(
+    message: SessionOutboundMessage,
+    source?: object,
+  ): SessionOutboundMessage {
+    if (message.type !== "project.update") return message;
+    const includeBackground = source
+      ? this.supportsForSource(CLIENT_CAPS.backgroundProjects, source)
+      : this.clientCapabilities.has(CLIENT_CAPS.backgroundProjects);
+    return {
+      ...message,
+      payload: this.directorySync.projectUpdateForScope(message.payload, includeBackground),
+    };
+  }
+
   private emitEventToOwner(
     subscription: { owner: OwnedSubscription; notifications: boolean },
     message: SessionOutboundMessage,
@@ -8470,7 +8489,7 @@ export class Session {
       message.type !== "agent_attention_required" &&
       message.type !== "terminal_attention_required"
     ) {
-      subscription.owner.emit(message);
+      subscription.owner.emit(this.projectMessageForClient(message, subscription.owner.source));
       return;
     }
     const shouldNotify =
@@ -8509,9 +8528,16 @@ export class Session {
           !this.delivery.isModern(source) &&
           this.wantsEvent(event, source)
         )
-          this.onMessageToSource(source, this.workspaceSetupMessageForClient(message, source));
+          this.onMessageToSource(
+            source,
+            this.projectMessageForClient(
+              this.workspaceSetupMessageForClient(message, source),
+              source,
+            ),
+          );
       }
-    } else if (delivered.size === 0 && this.wantsEvent(event)) this.onMessage(message);
+    } else if (delivered.size === 0 && this.wantsEvent(event))
+      this.onMessage(this.projectMessageForClient(message));
     return true;
   }
 

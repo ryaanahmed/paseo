@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
+import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
 import {
   composeWorkspaceStructure,
@@ -99,10 +100,14 @@ export function useWorkspaceDirectory(
   );
 }
 
-export function useWorkspaceStructure(serverIds: string[]): WorkspaceStructure {
+export function useWorkspaceStructure(
+  serverIds: string[],
+  options: { includeBackground?: boolean } = {},
+): WorkspaceStructure {
+  const { includeBackground } = options;
   const selectProjects = useMemo(
-    () => createWorkspaceStructureProjectsSelector(serverIds),
-    [serverIds],
+    () => createWorkspaceStructureProjectsSelector(serverIds, { includeBackground }),
+    [serverIds, includeBackground],
   );
   const projects = useStoreWithEqualityFn(
     useSessionStore,
@@ -140,9 +145,10 @@ export function useWorkspaceKeys(serverId: string | null): string[] {
 }
 
 export function useRecommendedProjectPaths(serverId: string | null): string[] {
+  const includeBackground = useSidebarViewStore((state) => state.showBackground);
   return useStoreWithEqualityFn(
     useSessionStore,
-    (state) => selectRecommendedProjectPaths(state, serverId),
+    (state) => selectRecommendedProjectPaths(state, serverId, { includeBackground }),
     workspaceEqualityFns.deep,
   );
 }

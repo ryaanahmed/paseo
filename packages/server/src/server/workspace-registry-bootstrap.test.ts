@@ -8,7 +8,12 @@ import { createTestLogger } from "../test-utils/test-logger.js";
 import { AgentStorage } from "./agent/agent-storage.js";
 import { createNoopWorkspaceGitService } from "./test-utils/workspace-git-service-stub.js";
 import type { WorkspaceGitService } from "./workspace-git-service.js";
-import { FileBackedProjectRegistry, FileBackedWorkspaceRegistry } from "./workspace-registry.js";
+import {
+  createPersistedProjectRecord,
+  createPersistedWorkspaceRecord,
+  FileBackedProjectRegistry,
+  FileBackedWorkspaceRegistry,
+} from "./workspace-registry.js";
 import { bootstrapWorkspaceRegistries } from "./workspace-registry-bootstrap.js";
 import { deriveProjectKey } from "./project-key.js";
 
@@ -50,6 +55,70 @@ describe("bootstrapWorkspaceRegistries", () => {
 
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("backfills only legacy projects from all workspace history and preserves explicit intent", async () => {
+    const timestamp = "2026-10-14T00:00:00.000Z";
+    for (const [id, history, explicit] of [
+      ["empty", [], undefined],
+      ["workers", [true], undefined],
+      ["mixed", [true, false], undefined],
+      ["explicit-public", [true], false],
+      ["explicit-hidden", [], true],
+    ] as const) {
+      const record = createPersistedProjectRecord({
+        projectId: id,
+        rootPath: path.join(tmpDir, id),
+        kind: "non_git",
+        displayName: id,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      await projectRegistry.upsert({ ...record, background: explicit });
+      for (const [index, background] of history.entries()) {
+        await workspaceRegistry.upsert(
+          createPersistedWorkspaceRecord({
+            workspaceId: `${id}-${index}`,
+            projectId: id,
+            cwd: path.join(tmpDir, id),
+            kind: "directory",
+            displayName: id,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            archivedAt: timestamp,
+            background,
+          }),
+        );
+      }
+    }
+    await bootstrapWorkspaceRegistries({
+      paseoHome,
+      agentStorage,
+      projectRegistry,
+      workspaceRegistry,
+      workspaceGitService,
+      logger,
+    });
+    expect(
+      Object.fromEntries(
+        (await projectRegistry.list()).map((project) => [project.projectId, project.background]),
+      ),
+    ).toEqual({
+      empty: false,
+      workers: true,
+      mixed: false,
+      "explicit-public": false,
+      "explicit-hidden": true,
+    });
+    await bootstrapWorkspaceRegistries({
+      paseoHome,
+      agentStorage,
+      projectRegistry,
+      workspaceRegistry,
+      workspaceGitService,
+      logger,
+    });
+    expect((await projectRegistry.get("workers"))?.background).toBe(true);
   });
 
   test("skips a legacy agent whose directory no longer exists", async () => {

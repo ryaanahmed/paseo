@@ -8,6 +8,7 @@ import {
   selectHasWorkspaces,
   selectHydratedWorkspaceServerIds,
   selectWorkspaceDirectoryServerIds,
+  selectProject,
   selectProjectOrder,
   selectRecommendedProjectPaths,
   selectWorkspace,
@@ -336,6 +337,25 @@ describe("selectWorkspaceFields", () => {
 });
 
 describe("workspace structure composition", () => {
+  it("retains exact access to hidden projects and updates discovery after promotion", () => {
+    const workspace = createWorkspace({ id: "worker" });
+    initializeWorkspaces([workspace]);
+    const hidden = { ...projectDescriptorFromTestWorkspace(workspace), background: true };
+    useSessionStore.getState().upsertProject(SERVER_ID, hidden);
+    const selectVisible = createWorkspaceStructureProjectsSelector([SERVER_ID], {
+      includeBackground: false,
+    });
+
+    expect(selectVisible(useSessionStore.getState())).toEqual([]);
+    expect(selectProject(useSessionStore.getState(), SERVER_ID, hidden.projectId)).toEqual(hidden);
+    expect(selectWorkspaceStructureProjects(useSessionStore.getState(), [SERVER_ID])).toHaveLength(
+      1,
+    );
+
+    useSessionStore.getState().upsertProject(SERVER_ID, { ...hidden, background: false });
+    expect(selectVisible(useSessionStore.getState())).toHaveLength(1);
+  });
+
   it("reuses structure when unrelated session state changes", () => {
     const workspace = createWorkspace({ id: "workspace-a" });
     const workspaces = new Map([[workspace.id, workspace]]);
@@ -539,6 +559,36 @@ describe("selectWorkspaceKeys", () => {
 });
 
 describe("selectRecommendedProjectPaths", () => {
+  it("keeps background roots out of ordinary path suggestions", () => {
+    const foreground = createWorkspace({
+      id: "foreground",
+      projectId: "foreground",
+      projectRootPath: "/repo/main",
+    });
+    const worker = createWorkspace({
+      id: "worker",
+      projectId: "worker",
+      projectRootPath: "/repo/worker",
+    });
+    initializeWorkspaces([foreground, worker]);
+    useSessionStore.getState().upsertProject(SERVER_ID, {
+      projectId: "worker",
+      projectDisplayName: "Worker",
+      projectCustomName: null,
+      projectKind: "git",
+      projectRootPath: "/repo/worker",
+      background: true,
+    });
+    expect(selectRecommendedProjectPaths(useSessionStore.getState(), SERVER_ID)).toEqual([
+      "/repo/main",
+    ]);
+    expect(
+      selectRecommendedProjectPaths(useSessionStore.getState(), SERVER_ID, {
+        includeBackground: true,
+      }),
+    ).toEqual(["/repo/main", "/repo/worker"]);
+  });
+
   it("updates when an existing workspace project root changes", () => {
     const workspace = createWorkspace({ id: "workspace-a", projectRootPath: "/repo/a" });
     initializeWorkspaces([workspace]);

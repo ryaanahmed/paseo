@@ -38,6 +38,50 @@ function workspace(id: string, projectId: string, root: string): WorkspaceDescri
 }
 
 describe("buildWorkspaceStructureProjects", () => {
+  test("hides background memberships without changing grouped project identities", () => {
+    const key = "remote:github.com/acme/app";
+    const sessions = [
+      {
+        serverId: "host-a",
+        projects: [
+          { ...project({ id: "worker", key, root: "/a/worker" }), background: true },
+          project({ id: "foreground", key, root: "/a/main" }),
+          project({ id: "empty", key: null, root: "/a/empty" }),
+        ],
+        workspaces: [workspace("worker-ws", "worker", "/a/worker")],
+      },
+      {
+        serverId: "host-b",
+        projects: [{ ...project({ id: "worker-b", key, root: "/b/worker" }), background: true }],
+        workspaces: [workspace("worker-b-ws", "worker-b", "/b/worker")],
+      },
+      {
+        serverId: "host-c",
+        projects: [project({ id: "foreground-c", key, root: "/c/main" })],
+        workspaces: [workspace("foreground-ws", "foreground-c", "/c/main")],
+      },
+    ];
+    const complete = buildWorkspaceStructureProjects({ sessions });
+    const visible = buildWorkspaceStructureProjects({ sessions, includeBackground: false });
+
+    expect(
+      visible
+        .flatMap((entry) => entry.hosts)
+        .map((host) => host.projectId)
+        .sort(),
+    ).toEqual(["empty", "foreground", "foreground-c"]);
+    for (const entry of visible) {
+      expect(complete.some((candidate) => candidate.viewKey === entry.viewKey)).toBe(true);
+    }
+    expect(visible.find((entry) => entry.viewKey === key)).toMatchObject({
+      iconWorkingDir: "/c/main",
+      hosts: [{ serverId: "host-c", projectId: "foreground-c" }],
+      workspaceKeys: ["host-c:foreground-ws"],
+    });
+    expect(complete.flatMap((entry) => entry.hosts)).toHaveLength(5);
+    expect(sessions[0]?.projects).toHaveLength(3);
+  });
+
   test("groups the same project key across hosts and keeps host-local ids", () => {
     const key = "remote:github.com/acme/app";
     const result = buildWorkspaceStructureProjects({

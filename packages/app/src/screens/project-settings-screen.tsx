@@ -104,7 +104,7 @@ export default function ProjectSettingsScreen({
   onBackToProjects,
   showBackToProjects,
 }: ProjectSettingsScreenProps) {
-  const { projects } = useProjects();
+  const { projects } = useProjects({ includeBackground: true });
   const project = useMemo(
     () => getProjectSummaryForHostProject(projects, serverId, projectId),
     [projectId, projects, serverId],

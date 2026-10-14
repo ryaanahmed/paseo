@@ -648,7 +648,7 @@ describe("WorkspaceDirectory empty projects", () => {
     expect(result.emptyProjects.map((p) => p.projectId)).toEqual(["empty"]);
   });
 
-  test("hides background workspaces and counts their project as empty unless includeBackground", async () => {
+  test("hides background workspaces without leaking their project as empty", async () => {
     const directory = makeDirectory({
       projects: [project({ projectId: "hidden-only" })],
       workspaces: [
@@ -672,7 +672,7 @@ describe("WorkspaceDirectory empty projects", () => {
       filter: { query: "helper" },
     });
     expect(hidden.entries).toEqual([]);
-    expect(hidden.emptyProjects.map((p) => p.projectId)).toEqual(["hidden-only"]);
+    expect(hidden.emptyProjects).toEqual([]);
 
     const shown = await directory.listFetchEntries({
       type: "fetch_workspaces_request",
@@ -681,6 +681,31 @@ describe("WorkspaceDirectory empty projects", () => {
     });
     expect(shown.entries.map((entry) => entry.id)).toEqual(["ws-internal"]);
     expect(shown.emptyProjects).toEqual([]);
+  });
+  test("keeps archived background project parents hidden while preserving deliberate empty projects", async () => {
+    const directory = makeDirectory({
+      projects: [
+        project({ projectId: "worker", background: true }),
+        project({ projectId: "empty" }),
+      ],
+      workspaces: [
+        {
+          workspaceId: "archived-worker",
+          projectId: "worker",
+          cwd: "/workspace/worker",
+          kind: "directory",
+          displayName: "Worker",
+          createdAt: NOW,
+          updatedAt: NOW,
+          archivedAt: NOW,
+          background: true,
+        },
+      ],
+    });
+    expect((await directory.listEmptyProjects()).map((p) => p.projectId)).toEqual(["empty"]);
+    expect(
+      (await directory.listEmptyProjects({ includeBackground: true })).map((p) => p.projectId),
+    ).toEqual(["worker", "empty"]);
   });
 });
 

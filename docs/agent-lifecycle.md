@@ -107,8 +107,16 @@ creates one without an override, and accept explicit true or false.
 
 The daemon derives agent discovery from workspace ownership. Default workspace and agent lists,
 including History requests, exclude background work; `filter.includeBackground` includes it.
-Exact-ID operations bypass discovery filtering. The app replicates both kinds and filters only
-its sidebar with **Show background**, so direct navigation and restored tabs remain available.
+Exact-ID operations bypass discovery filtering. Projects allocated for background work also
+start hidden. Explicitly opening a project or creating a foreground workspace promotes its
+project permanently; later workers cannot hide it again. Existing projects with only background
+workspace history, including archived workers, inherit hidden visibility when first upgraded.
+Projects without workspace history and projects with foreground history remain visible.
+
+The app keeps a complete replica and filters normal project pickers and sidebar navigation with
+**Show background**, so direct navigation and restored tabs remain available. Background project
+listing requires `includeBackground`; live project events opt in per client through
+`background_projects`. Older clients receive visible projects without needing an app update.
 
 Sequenced directories keep complete canonical collections. A filtered read must never replace
 those collections with its subset. Inclusive and default observations have distinct cursor

@@ -564,18 +564,18 @@ export class WorkspaceDirectory {
       this.deps.workspaceRegistry.list(),
       this.deps.projectRegistry.list(),
     ]);
-    // A project whose only workspaces are hidden reads as empty to that caller.
+    // Hidden children still occupy their project; filtering must not reveal an empty parent.
     const projectIdsWithActiveWorkspaces = new Set(
       persistedWorkspaces
-        .filter(
-          (workspace) =>
-            !workspace.archivedAt && (options?.includeBackground === true || !workspace.background),
-        )
+        .filter((workspace) => !workspace.archivedAt)
         .map((workspace) => workspace.projectId),
     );
     return persistedProjects
       .filter(
-        (project) => !project.archivedAt && !projectIdsWithActiveWorkspaces.has(project.projectId),
+        (project) =>
+          !project.archivedAt &&
+          (options?.includeBackground === true || !project.background) &&
+          !projectIdsWithActiveWorkspaces.has(project.projectId),
       )
       .map((project) => ({
         projectId: project.projectId,
@@ -585,6 +585,7 @@ export class WorkspaceDirectory {
         projectCustomIconRevision: project.customIconRevision ?? null,
         projectRootPath: project.rootPath,
         projectKind: project.kind,
+        background: project.background || undefined,
       }));
   }
 
