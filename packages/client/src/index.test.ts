@@ -2012,3 +2012,20 @@ test("plugin actions preserve daemon RPC errors without retrying", async () => {
   expect(FakeWebSocket.instances).toHaveLength(1);
   await client.close();
 });
+
+test.each([{ activeTurnBehavior: "queue" as const }, { sourceAgentId: "coordinator" }])(
+  "agent run refuses queued delivery before sending: %j",
+  async (options) => {
+    const { client, ws } = await connectClient({
+      agentExecutionOutcomes: true,
+      agentMessageQueue: true,
+      agentMessageProvenance: true,
+    });
+    const sentCount = ws.sent.length;
+    await expect(client.agents.ref("agent_sdk").run("next", options)).rejects.toThrow(
+      "Use agent.send() with a stable messageId",
+    );
+    expect(ws.sent).toHaveLength(sentCount);
+    await client.close();
+  },
+);

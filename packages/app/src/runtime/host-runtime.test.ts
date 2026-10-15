@@ -135,6 +135,7 @@ class FakeDaemonClient {
     if (response) await response;
     const failure = this.sendAgentMessageFailures.shift();
     if (failure) throw failure;
+    return { requestId: "test-send", agentId: args[0], accepted: true, error: null };
   }
 
   async waitForSentMessages(count: number): Promise<void> {

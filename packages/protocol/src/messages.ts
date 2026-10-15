@@ -1210,7 +1210,7 @@ const ImageAttachmentSchema = z.object({
   mimeType: z.string(), // e.g., "image/jpeg", "image/png"
 });
 
-export const ActiveTurnBehaviorSchema = z.enum(["interrupt", "steer", "reject"]);
+export const ActiveTurnBehaviorSchema = z.enum(["interrupt", "steer", "reject", "queue"]);
 export type ActiveTurnBehavior = z.infer<typeof ActiveTurnBehaviorSchema>;
 
 export const SendAgentMessageSchema = z.object({
@@ -3743,6 +3743,7 @@ export const ServerInfoStatusPayloadSchema = z
         agentRoles: z.boolean().optional(),
         agentContextPolicy: z.boolean().optional(),
         agentExecutionOutcomes: z.boolean().optional(),
+        agentMessageQueue: z.boolean().optional(),
         // COMPAT(canonicalSubmittedPrompts): added in v0.2.6, remove gate after 2027-01-30.
         canonicalSubmittedPrompts: z.boolean().optional(),
         agentMessageProvenance: z.boolean().optional(),
@@ -4993,6 +4994,7 @@ export const SendAgentMessageResponseMessageSchema = z.object({
     requestId: z.string(),
     agentId: z.string(),
     accepted: z.boolean(),
+    queued: z.boolean().optional(),
     error: z.string().nullable(),
   }),
 });

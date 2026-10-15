@@ -272,7 +272,7 @@ Agent IDs can be shortened, `abc` works if it's unambiguous.
 
 ## Sending messages
 
-Send follow-up tasks to a running or idle agent:
+Queue follow-up tasks for a running or idle agent. A running agent finishes its current turn before receiving the next message. Queued messages survive daemon restarts.
 
 Use the recipient's agent ID from `paseo ls`, or [copy it from the agent's tab](/docs/orchestration-workflows#send-a-prompt-to-another-agent).
 
@@ -280,7 +280,12 @@ Use the recipient's agent ID from `paseo ls`, or [copy it from the agent's tab](
 paseo send <id> "now run the tests"
 paseo send <id> --image screenshot.png "what's wrong here?"
 paseo send <id> --no-wait "queue this task"
+paseo send <id> --interrupt "stop the current task and investigate this failure"
 ```
+
+`--interrupt` explicitly cancels the current turn. `--no-wait` controls observation only: it returns after queue acceptance. Without it, the CLI waits for the submitted message’s exact execution, including time spent queued. An acceptance acknowledgement is not completion.
+
+If a connection fails during submission or observation, keep the reported agent and message IDs and inspect the exact execution before submitting another message. A missing execution record can mean the message is still queued.
 
 ## Viewing logs
 

@@ -954,6 +954,7 @@ export async function createPaseoDaemon(
   await executionStore.initialize();
   const agentManager = new AgentManager({
     executionStore,
+    messageQueueDirectory: path.join(config.paseoHome, "runtime", "agent-message-queue"),
     contextManager: new GobstopperContextManager({
       stateDirectory: path.join(config.paseoHome, "runtime", "context-scopes"),
     }),
@@ -1805,6 +1806,7 @@ export async function createPaseoDaemon(
       // model loading doesn't block the server from accepting connections.
       speechService.start();
       scriptHealthMonitor.start();
+      await agentManager.startAgentMessageQueue();
     } catch (error) {
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);

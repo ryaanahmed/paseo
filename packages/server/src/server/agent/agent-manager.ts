@@ -3,6 +3,13 @@ import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import type { AgentExecution, AgentExecutionQuery } from "@getpaseo/protocol/agent-execution";
 import { AgentExecutionStore } from "./agent-execution-store.js";
+import {
+  AgentMessageQueue,
+  type AgentMessageMetadata,
+  type QueuedAgentMessage,
+} from "./agent-message-queue.js";
+import { ensureUnarchivedAgentLoaded } from "./agent-loading.js";
+import { sendPromptToAgent, setupFinishNotification } from "./agent-prompt.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
@@ -326,6 +333,7 @@ export interface CreateAgentOptions {
 
 export interface AgentManagerOptions {
   executionStore?: AgentExecutionStore;
+  messageQueueDirectory?: string;
   contextManager?: GobstopperContextManager;
   pluginLifecycle?: PluginLifecycle;
   /** An internal workspace makes every agent created inside it internal. */
@@ -759,6 +767,8 @@ export class AgentManager {
   private readonly foregroundMutationTails = new Map<string, Promise<void>>();
   private readonly runs = new AgentRunState();
   private readonly executionStore?: AgentExecutionStore;
+  private readonly messageQueue?: AgentMessageQueue;
+  private messageQueueTimer?: ReturnType<typeof setInterval>;
   private readonly activeExecutions = new Map<
     string,
     { executionId: string; turnId: string | null; session: AgentSession }
@@ -825,6 +835,199 @@ export class AgentManager {
       providerDefinitions: options.providerDefinitions ?? {},
       clients: options.clients ?? {},
     });
+    this.messageQueue = this.createAgentMessageQueue(options.messageQueueDirectory);
+  }
+
+  private createAgentMessageQueue(directory: string | undefined): AgentMessageQueue | undefined {
+    if (!directory) return undefined;
+    if (!this.registry || !this.executionStore)
+      throw new Error("agent_message_queue_requires_persistence");
+    return new AgentMessageQueue(directory, {
+      recipient: (agentId) => this.queuedMessageRecipient(agentId),
+      execution: (agentId, clientMessageId) =>
+        this.getExecution(agentId, { kind: "submission", clientMessageId }),
+      dispatch: (message) => this.dispatchQueuedMessage(message),
+      onState: (message) => {
+        if (message.state === "unknown" || message.state === "blocked") {
+          this.logger.warn(
+            {
+              agentId: message.agentId,
+              clientMessageId: message.clientMessageId,
+              state: message.state,
+              errorCode: message.errorCode,
+            },
+            "Agent message queue requires reconciliation; later messages remain pending",
+          );
+        }
+      },
+    });
+  }
+
+  async startAgentMessageQueue(): Promise<void> {
+    if (!this.messageQueue || this.messageQueueTimer || !this.acceptingAgentRegistrations) return;
+    await this.messageQueue.initialize();
+    if (!this.acceptingAgentRegistrations || this.messageQueueTimer) return;
+    this.messageQueueTimer = setInterval(() => this.reconcileAgentMessages(), 1000);
+    this.messageQueueTimer.unref();
+    this.reconcileAgentMessages();
+  }
+
+  async enqueueAgentMessage(
+    agentId: string,
+    prompt: AgentPromptInput,
+    options?: AgentRunOptions,
+    metadata?: AgentMessageMetadata,
+  ): Promise<{ disposition: "queued" }> {
+    if (!this.messageQueue) throw new Error("agent_message_queue_unavailable");
+    if (!this.acceptingAgentRegistrations) throw new Error("agent_message_queue_stopped");
+    await this.messageQueue.enqueue({
+      agentId,
+      prompt,
+      options: { ...options, clientMessageId: options?.clientMessageId ?? randomUUID() },
+      metadata,
+    });
+    await this.startAgentMessageQueue();
+    this.reconcileAgentMessages();
+    return { disposition: "queued" };
+  }
+
+  private reconcileAgentMessages(): void {
+    if (!this.acceptingAgentRegistrations) return;
+    void this.messageQueue?.reconcile().catch((error) => {
+      this.logger.error({ err: error }, "Failed to reconcile durable agent messages");
+    });
+  }
+
+  private async queuedMessageRecipient(agentId: string): Promise<"idle" | "busy" | "unavailable"> {
+    const record = await this.registry?.get(agentId);
+    if (!record || record.archivedAt) return "unavailable";
+    const agent = this.getAgent(agentId);
+    return this.hasInFlightRun(agentId) ||
+      agent?.pendingPermissions.size ||
+      agent?.lifecycle === "running"
+      ? "busy"
+      : "idle";
+  }
+
+  private async dispatchQueuedMessage(
+    message: QueuedAgentMessage,
+  ): Promise<"started" | "busy" | "unavailable"> {
+    try {
+      return await this.dispatchQueuedMessageInner(message);
+    } catch (error) {
+      await this.notifyQueuedMessageStartupFailure(message, error);
+      throw error;
+    }
+  }
+
+  private async notifyQueuedMessageStartupFailure(
+    message: QueuedAgentMessage,
+    error: unknown,
+  ): Promise<void> {
+    const callerAgentId = message.metadata.notifyOnFinish?.callerAgentId;
+    if (!callerAgentId) return;
+    try {
+      const execution = await this.getExecution(message.agentId, {
+        kind: "submission",
+        clientMessageId: message.clientMessageId,
+      });
+      // Once a turn starts, its armed watcher owns terminal notifications.
+      if (execution?.turnId) return;
+      await sendPromptToAgent({
+        agentManager: this,
+        agentStorage: this.registry!,
+        agentId: callerAgentId,
+        source: { kind: "agent-notification", agentId: message.agentId, event: "errored" },
+        messageId: `queued-start-failure:${message.agentId}:${message.clientMessageId}`,
+        prompt: [
+          "A queued agent message could not confirm provider startup. Acceptance may be unknown; do not replay automatically. Inspect the exact execution before deciding how to recover.",
+          JSON.stringify({
+            agentId: message.agentId,
+            clientMessageId: message.clientMessageId,
+            executionId: execution?.executionId ?? null,
+            status: execution?.status ?? "unknown",
+            errorCode: execution?.errorCode ?? "admission_unknown",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ].join("\n\n"),
+        activeTurnBehavior: "queue",
+        unarchive: false,
+        logger: this.logger,
+      });
+    } catch (notificationError) {
+      this.logger.error(
+        {
+          err: notificationError,
+          agentId: message.agentId,
+          clientMessageId: message.clientMessageId,
+        },
+        "Failed to queue startup failure notification",
+      );
+    }
+  }
+
+  private async dispatchQueuedMessageInner(
+    message: QueuedAgentMessage,
+  ): Promise<"started" | "busy" | "unavailable"> {
+    if (!this.acceptingAgentRegistrations) return "busy";
+    if ((await this.queuedMessageRecipient(message.agentId)) === "unavailable")
+      return "unavailable";
+    await ensureUnarchivedAgentLoaded(message.agentId, {
+      agentManager: this,
+      agentStorage: this.registry!,
+      logger: this.logger,
+    });
+    return this.runLifecycleMutation(message.agentId, () =>
+      this.runForegroundMutation(message.agentId, async () => {
+        if (!this.acceptingAgentRegistrations) return "busy";
+        const recipient = await this.queuedMessageRecipient(message.agentId);
+        if (recipient !== "idle") return recipient;
+        if (message.metadata.sessionMode)
+          await this.setAgentMode(message.agentId, message.metadata.sessionMode);
+        // Nothing may await between the final busy check and streamAgent's synchronous reservation.
+        const agent = this.getAgent(message.agentId);
+        if (
+          this.hasInFlightRun(message.agentId) ||
+          agent?.pendingPermissions.size ||
+          agent?.lifecycle === "running"
+        )
+          return "busy";
+        const stopNotification = message.metadata.notifyOnFinish
+          ? setupFinishNotification({
+              agentManager: this,
+              agentStorage: this.registry!,
+              childAgentId: message.agentId,
+              callerAgentId: message.metadata.notifyOnFinish.callerAgentId,
+              waitForTurnStart: true,
+              logger: this.logger,
+            })
+          : undefined;
+        let iterator: AsyncGenerator<AgentStreamEvent>;
+        try {
+          iterator = this.streamAgent(message.agentId, message.prompt, message.options);
+        } catch (error) {
+          stopNotification?.();
+          throw error;
+        }
+        void (async () => {
+          try {
+            for await (const _event of iterator) {
+              /* AgentManager publishes the execution events. */
+            }
+          } catch (error) {
+            stopNotification?.();
+            await this.notifyQueuedMessageStartupFailure(message, error);
+            this.logger.error(
+              { err: error, agentId: message.agentId, clientMessageId: message.clientMessageId },
+              "Queued agent execution failed; inspect exact execution receipt",
+            );
+          } finally {
+            this.reconcileAgentMessages();
+          }
+        })();
+        return "started";
+      }),
+    );
   }
 
   private configurePaseoTools(options: AgentManagerOptions): void {
@@ -909,6 +1112,8 @@ export class AgentManager {
 
   prepareForShutdown(): void {
     this.acceptingAgentRegistrations = false;
+    if (this.messageQueueTimer) clearInterval(this.messageQueueTimer);
+    this.messageQueue?.stop();
   }
 
   setPaseoToolsEnabled(enabled: boolean): void {
@@ -2841,6 +3046,8 @@ export class AgentManager {
         if (!agent.activeForegroundTurnId) {
           await this.refreshRuntimeInfo(agent);
         }
+        // Terminal subscribers have observed this turn before queued work can arm its next watcher.
+        this.reconcileAgentMessages();
       }
     }.call(this);
 
@@ -5267,6 +5474,7 @@ export class AgentManager {
    * either install them or close them.
    */
   async flushForShutdown(): Promise<void> {
+    await this.messageQueue?.flush();
     await this.flushTasks({ includeAgentRegistrations: true });
   }
 

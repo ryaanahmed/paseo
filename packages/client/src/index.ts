@@ -30,7 +30,11 @@ import type {
   WorkspaceDescriptorPayload,
   WorkspaceCreateRequest,
 } from "@getpaseo/protocol/messages";
-import { DaemonClient, type CreateAgentRequestOptions } from "./daemon-client.js";
+import {
+  AgentMessageRejectedError,
+  DaemonClient,
+  type CreateAgentRequestOptions,
+} from "./daemon-client.js";
 import {
   createTerminalActions,
   type PaseoTerminalActions,
@@ -969,6 +973,13 @@ function createAgentHandleFactory(
       },
       run: async (text, options) => {
         const { timeoutMs, ...sendOptions } = options ?? {};
+        const activeTurnBehavior =
+          sendOptions.activeTurnBehavior ?? (sendOptions.sourceAgentId ? "queue" : undefined);
+        if (activeTurnBehavior === "queue") {
+          throw new AgentMessageRejectedError(
+            "Queued agent.run() is unsupported. Use agent.send() with a stable messageId, then agent.execution({ kind: 'submission', clientMessageId: messageId }) to observe that message.",
+          );
+        }
         await daemonClient.sendAgentMessage(id, text, sendOptions);
         const result = await daemonClient.waitForFinish(
           id,

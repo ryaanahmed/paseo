@@ -37,7 +37,7 @@ export interface StartAgentRunOptions {
   clearPendingPermissions?: boolean;
 }
 
-export type PromptDispatchDisposition = "out_of_band" | "steered" | "turn_started";
+export type PromptDispatchDisposition = "out_of_band" | "steered" | "turn_started" | "queued";
 
 async function steerOrReplaceActiveRun(
   agentManager: AgentRunController,
@@ -239,6 +239,8 @@ export interface SendPromptToAgentParams {
   runOptions?: AgentRunOptions;
   /** Optional mode to set on the agent before the run starts. */
   sessionMode?: string;
+  /** Persist this watcher with a queued prompt and arm it only when that prompt starts. */
+  queuedFinishNotification?: { callerAgentId: string };
   /**
    * Default true. When false, archived agents are skipped instead of being
    * unarchived. Use false for system-injected prompts (chat mentions,
@@ -314,8 +316,8 @@ async function resolvePromptSource(
 }
 
 /**
- * Full send-prompt orchestration: (optional unarchive) → load → (optional
- * mode change) → start run.
+ * Agent messages are durably queued before loading a provider. Explicit interruption
+ * and human prompts use (optional unarchive) → load → (optional mode change) → start run.
  *
  * Every surface that sends a prompt to an agent (Session/WS, MCP, CLI-through-MCP,
  * chat mentions, notify-on-finish) MUST go through this so behavior can never
@@ -328,6 +330,30 @@ export async function sendPromptToAgent(
   params: SendPromptToAgentParams,
 ): Promise<{ disposition: PromptDispatchDisposition }> {
   const unarchive = params.unarchive ?? true;
+  const activeTurnBehavior = params.activeTurnBehavior ?? (params.source ? "queue" : undefined);
+  const source = await resolvePromptSource(params.source, params.agentManager, params.agentStorage);
+  const delivery = prepareAgentMessage(
+    params.prompt,
+    source,
+    params.messageId ?? params.runOptions?.clientMessageId,
+  );
+  const runOptions = delivery.messageId
+    ? { ...params.runOptions, clientMessageId: delivery.messageId }
+    : params.runOptions;
+
+  // Queue acceptance must not load a provider, change its mode, or disturb its current turn.
+  if (activeTurnBehavior === "queue") {
+    const record = await params.agentStorage.get(params.agentId);
+    if (record?.archivedAt && !unarchive) return { disposition: "queued" };
+    const result = await params.agentManager.enqueueAgentMessage(
+      params.agentId,
+      delivery.prompt,
+      runOptions,
+      { sessionMode: params.sessionMode, notifyOnFinish: params.queuedFinishNotification },
+    );
+    params.onDispatch?.("queued");
+    return result;
+  }
 
   const record = await params.agentStorage.get(params.agentId);
   let archivedAtToRestore: string | null = null;
@@ -359,12 +385,6 @@ export async function sendPromptToAgent(
   if (params.sessionMode) {
     await params.agentManager.setAgentMode(params.agentId, params.sessionMode);
   }
-
-  const source = await resolvePromptSource(params.source, params.agentManager, params.agentStorage);
-  const delivery = prepareAgentMessage(params.prompt, source, params.messageId);
-  const runOptions = delivery.messageId
-    ? { ...params.runOptions, clientMessageId: delivery.messageId }
-    : params.runOptions;
 
   return await startAgentRun(params.agentManager, params.agentId, delivery.prompt, params.logger, {
     replaceRunning: true,
@@ -551,7 +571,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         agentId: childAgentId,
         event: finishNotificationEvents[reason],
       },
-      activeTurnBehavior: "steer",
+      activeTurnBehavior: "queue",
       unarchive: false,
       logger,
     });

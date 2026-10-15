@@ -5884,57 +5884,103 @@ test("execution query preserves missing records as null", async () => {
 });
 
 test.each([
-  { state: "archived", error: "agent_archived", expectedLiveLookups: 0 },
-  { state: "running", error: "agent_busy", expectedLiveLookups: 4 },
-  { state: "permission", error: "agent_busy", expectedLiveLookups: 4 },
-])(
-  "reject send leaves no pending receipt for $state recipients",
-  async ({ state, error, expectedLiveLookups }) => {
-    const receiptDirectory = mkdtempSync(join(tmpdir(), "paseo-reject-receipt-"));
-    try {
-      const messages: SessionOutboundMessage[] = [];
-      const stored = createStoredAgentRecord({
-        id: "agent-1",
-        cwd: "/project",
-        title: "Coordinator",
-        archivedAt: state === "archived" ? "2026-10-12T12:00:00.000Z" : null,
-      });
-      let liveLookups = 0;
-      const session = createSessionForTest({
-        messages,
-        messageReceipts: new MessageReceipts(receiptDirectory),
-        agentStorage: { get: async () => stored, list: async () => [stored] },
-        agentManager: {
-          waitForAgentClose: async () => {},
-          getAgent: () => {
-            liveLookups++;
-            return {
-              id: stored.id,
-              pendingPermissions: new Map(state === "permission" ? [["permission-1", {}]] : []),
-            };
-          },
-          hasInFlightRun: () => state === "running",
+  { state: "archived", error: "agent_archived" },
+  { state: "running", error: "agent_busy" },
+  { state: "permission", error: "agent_busy" },
+])("reject send leaves no pending receipt for $state recipients", async ({ state, error }) => {
+  const receiptDirectory = mkdtempSync(join(tmpdir(), "paseo-reject-receipt-"));
+  try {
+    const messages: SessionOutboundMessage[] = [];
+    const stored = createStoredAgentRecord({
+      id: "agent-1",
+      cwd: "/project",
+      title: "Coordinator",
+      archivedAt: state === "archived" ? "2026-10-12T12:00:00.000Z" : null,
+    });
+    const resumeAgentFromPersistence = vi.fn();
+    const createAgent = vi.fn();
+    const streamAgent = vi.fn();
+    const replaceAgentRun = vi.fn();
+    const session = createSessionForTest({
+      messages,
+      messageReceipts: new MessageReceipts(receiptDirectory),
+      agentStorage: { get: async () => stored, list: async () => [stored] },
+      agentManager: {
+        waitForAgentClose: async () => {},
+        resumeAgent,
+        streamAgent,
+        replaceAgentRun,
+        getAgent: () => {
+          return {
+            id: stored.id,
+            pendingPermissions: new Map(state === "permission" ? [["permission-1", {}]] : []),
+          };
         },
+        hasInFlightRun: () => state === "running",
+      },
+    });
+    // A refused notification can be retried with the same message ID later.
+    for (const requestId of ["first", "retry"]) {
+      await session.handleMessage({
+        type: "send_agent_message_request",
+        requestId,
+        agentId: stored.id,
+        messageId: "notification-1",
+        text: "Execution metadata is ready",
+        activeTurnBehavior: "reject",
       });
-      // A refused notification can be retried with the same message ID later.
-      for (const requestId of ["first", "retry"]) {
-        await session.handleMessage({
-          type: "send_agent_message_request",
-          requestId,
-          agentId: stored.id,
-          messageId: "notification-1",
-          text: "Execution metadata is ready",
-          activeTurnBehavior: "reject",
-        });
-        expect(messages).toContainEqual({
-          type: "send_agent_message_response",
-          payload: { requestId, agentId: stored.id, accepted: false, error },
-        });
-        expect(readdirSync(receiptDirectory)).toEqual([]);
-      }
-      expect(liveLookups).toBe(expectedLiveLookups);
-    } finally {
-      rmSync(receiptDirectory, { recursive: true, force: true });
+      expect(messages).toContainEqual({
+        type: "send_agent_message_response",
+        payload: { requestId, agentId: stored.id, accepted: false, error },
+      });
+      expect(readdirSync(receiptDirectory)).toEqual([]);
     }
-  },
-);
+    expect(resumeAgentFromPersistence).not.toHaveBeenCalled();
+    expect(createAgent).not.toHaveBeenCalled();
+    expect(streamAgent).not.toHaveBeenCalled();
+    expect(replaceAgentRun).not.toHaveBeenCalled();
+  } finally {
+    rmSync(receiptDirectory, { recursive: true, force: true });
+  }
+});
+
+test("agent-source websocket sends acknowledge queue acceptance without waiting for the active run", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const stored = createStoredAgentRecord({ id: "agent-1", cwd: "/project", title: "Coordinator" });
+  const enqueueAgentMessage = vi.fn().mockResolvedValue({ disposition: "queued" });
+  const waitForAgentRunStart = vi.fn();
+  const session = createSessionForTest({
+    messages,
+    agentStorage: { get: async () => stored, list: async () => [stored] },
+    agentManager: {
+      getAgent: () => null,
+      enqueueAgentMessage,
+      waitForAgentRunStart,
+    },
+  });
+  await session.handleMessage({
+    type: "send_agent_message_request",
+    requestId: "queue-request",
+    agentId: stored.id,
+    sourceAgentId: "worker",
+    messageId: "worker-result",
+    text: "Work completed",
+  });
+  expect(enqueueAgentMessage).toHaveBeenCalledWith(
+    stored.id,
+    expect.any(String),
+    { clientMessageId: "worker-result" },
+    { sessionMode: undefined, notifyOnFinish: undefined },
+  );
+  expect(waitForAgentRunStart).not.toHaveBeenCalled();
+  expect(messages).toContainEqual({
+    type: "send_agent_message_response",
+    payload: {
+      requestId: "queue-request",
+      agentId: stored.id,
+      accepted: true,
+      queued: true,
+      error: null,
+    },
+  });
+});

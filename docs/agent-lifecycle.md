@@ -50,6 +50,19 @@ older cancellation from settling a newer turn. If interruption is rejected or ti
 keeps its active foreground turn and replacement, reload, rewind, and Stop report the failure.
 Accepting new work after an ambiguous interruption would create a split-brain session.
 
+## Queued agent messages
+
+Agent-to-agent sends and finish notifications wait behind the recipient's current
+turn. Queue acceptance and execution are separate: callers must keep the message
+ID and observe its exact execution, rather than treating the recipient's next idle
+state as completion. Deliberate interruption remains an explicit send option.
+
+The daemon owns pending messages across client disconnects and restarts. An
+uncertain provider admission is retained for reconciliation and is never replayed
+just because a receipt is missing. An archived recipient is never revived by a
+queued message. The queue records the recipient and message ID when delivery
+needs operator reconciliation.
+
 ## Relationships
 
 Agents can launch other agents via the agent-scoped `create_agent` MCP tool. Agent-scoped creation is always asynchronous and always stamps `paseo.parent-agent-id`, pointing back at the caller. Omit `workspaceId` to use the caller's workspace, or pass an existing workspace ID returned by `create_workspace`. Placement never changes parentage.

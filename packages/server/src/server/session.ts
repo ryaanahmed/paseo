@@ -8233,6 +8233,8 @@ export class Session {
         },
         "agent.session.send_agent_message",
       );
+      const queued =
+        (msg.activeTurnBehavior ?? (msg.sourceAgentId ? "queue" : "interrupt")) === "queue";
       const send = async () => {
         const result = await sendPromptToAgent({
           agentManager: this.agentManager,
@@ -8243,7 +8245,7 @@ export class Session {
             ? { kind: "agent-message", agentId: msg.sourceAgentId }
             : undefined,
           messageId: msg.messageId,
-          activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
+          activeTurnBehavior: msg.activeTurnBehavior ?? (msg.sourceAgentId ? "queue" : "interrupt"),
           clearPendingPermissions: true,
           logger: this.sessionLogger,
         });
@@ -8255,14 +8257,16 @@ export class Session {
           );
         }
       };
-      if (msg.messageId) {
+      // The durable queue owns queued-message deduplication and restart recovery.
+      if (msg.messageId && !queued) {
         await this.messageReceipts.send({
           agentId,
           messageId: msg.messageId,
           request: {
             prompt,
             sourceAgentId: msg.sourceAgentId,
-            activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
+            activeTurnBehavior:
+              msg.activeTurnBehavior ?? (msg.sourceAgentId ? "queue" : "interrupt"),
           },
           prepare: async () => {
             // Refuse archived recipients before opening a provider session.
@@ -8291,6 +8295,7 @@ export class Session {
           requestId: msg.requestId,
           agentId,
           accepted: true,
+          ...(queued ? { queued: true } : {}),
           error: null,
         },
       });

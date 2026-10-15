@@ -18,6 +18,7 @@ import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import {
   startAgentRun,
+  sendPromptToAgent,
   setupFinishNotification,
   waitForAgentRunStartWithTimeout,
 } from "./agent-prompt.js";
@@ -119,6 +120,13 @@ function createFinishNotificationScenario(
   Reflect.set(agentManager, "steerOrReplaceActiveTurn", async () => {
     steerAttemptCount += 1;
     return { status: "inactive" };
+  });
+  Reflect.set(agentManager, "enqueueAgentMessage", async (_agentId: string, prompt: string) => {
+    resolveParentPrompt?.(prompt);
+    if (options?.parentPromptError) throw options.parentPromptError;
+    parentPrompted = true;
+    parentPrompts.push(prompt);
+    return { disposition: "queued" };
   });
   Reflect.set(agentManager, "streamAgent", (_agentId: string, prompt: string) => {
     parentPrompted = true;
@@ -294,7 +302,7 @@ test("finish notifications tell the parent the child's last assistant message", 
     },
     text: "Agent child-agent (Child Agent) finished.\n\n<agent-response>\nImplemented the cleanup and all checks pass.\n</agent-response>",
   });
-  expect(scenario.steerAttemptCount()).toBe(1);
+  expect(scenario.steerAttemptCount()).toBe(0);
 });
 
 test("finish notifications truncate oversized child responses", async () => {
@@ -889,3 +897,40 @@ it.each(["running", "permission"])(
     expect(manager.streamAgent).not.toHaveBeenCalled();
   },
 );
+
+test("agent messages enqueue before provider loading, mode changes, or run startup", async () => {
+  const agentManager = new AgentManager({ clients: {}, logger: createTestLogger() });
+  const enqueue = vi.fn().mockResolvedValue({ disposition: "queued" });
+  const setMode = vi.spyOn(agentManager, "setAgentMode");
+  const stream = vi.spyOn(agentManager, "streamAgent");
+  Reflect.set(agentManager, "enqueueAgentMessage", enqueue);
+  const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
+  Reflect.set(agentStorage, "get", async () => null);
+
+  const result = await sendPromptToAgent({
+    agentManager,
+    agentStorage,
+    agentId: "recipient",
+    prompt: "Work after the current task",
+    source: { kind: "agent-message", agentId: "sender" },
+    messageId: "submission-1",
+    sessionMode: "full-access",
+    queuedFinishNotification: { callerAgentId: "sender" },
+    logger: createTestLogger(),
+  });
+
+  expect(result).toEqual({ disposition: "queued" });
+  expect(enqueue).toHaveBeenCalledWith(
+    "recipient",
+    expect.any(String),
+    { clientMessageId: "submission-1" },
+    { sessionMode: "full-access", notifyOnFinish: { callerAgentId: "sender" } },
+  );
+  expect(parseAgentMessage(enqueue.mock.calls[0]![1])).toMatchObject({
+    id: "submission-1",
+    source: { kind: "agent-message", agentId: "sender" },
+    text: "Work after the current task",
+  });
+  expect(setMode).not.toHaveBeenCalled();
+  expect(stream).not.toHaveBeenCalled();
+});

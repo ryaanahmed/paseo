@@ -1136,6 +1136,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   const commonSendAgentPromptInputSchema = {
     agentId: z.string(),
     prompt: z.string(),
+    interrupt: z
+      .boolean()
+      .optional()
+      .describe(
+        "Interrupt the recipient's current turn. Agent messages queue until the recipient is idle by default.",
+      ),
     sessionMode: z.string().optional().describe("Optional mode to set before running the prompt."),
   };
   const agentToAgentSendAgentPromptInputSchema = {
@@ -1888,19 +1894,25 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     {
       title: "Send agent prompt",
       description:
-        "Send a task and return after dispatch acknowledgement. Calling agents receive finish notifications by default.",
+        "Send a task and return after acceptance. Agent messages queue until the recipient is idle unless interrupt is true. Calling agents receive finish notifications by default.",
       inputSchema: sendAgentPromptInputSchema,
       outputSchema: {
         success: z.boolean(),
-        disposition: z.enum(["turn_started", "out_of_band"]).optional(),
+        disposition: z.enum(["turn_started", "out_of_band", "queued"]).optional(),
         status: AgentStatusEnum,
         guidance: z.string().optional(),
       },
     },
-    async ({ agentId, prompt, sessionMode, notifyOnFinish = Boolean(callerAgentId) }) => {
+    async ({
+      agentId,
+      prompt,
+      sessionMode,
+      interrupt,
+      notifyOnFinish = Boolean(callerAgentId),
+    }) => {
       let stopNotification: (() => void) | undefined;
       function armFinishNotification(disposition: PromptDispatchDisposition): void {
-        if (!callerAgentId || !notifyOnFinish) {
+        if (!callerAgentId || !notifyOnFinish || disposition === "queued") {
           return;
         }
         stopNotification = setupFinishNotification({
@@ -1921,6 +1933,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         prompt,
         source: callerAgentId ? { kind: "agent-message", agentId: callerAgentId } : undefined,
         sessionMode,
+        activeTurnBehavior: interrupt ? "interrupt" : "queue",
+        queuedFinishNotification: notifying && callerAgentId ? { callerAgentId } : undefined,
         onDispatch: armFinishNotification,
         logger: childLogger,
       }).catch((error) => {

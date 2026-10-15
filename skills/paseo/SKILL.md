@@ -63,7 +63,7 @@ Detach is an explicit user action in the subagents track, not an agent tool. A c
 
 Agent-scoped `create_agent` defaults `notifyOnFinish` to true. Set it to `false` only for truly fire-and-forget agents.
 
-**`send_agent_prompt`** — `{ agentId, prompt }`. Use for follow-ups to an existing agent. Returns after dispatch acknowledgement. Agent-scoped calls default `notifyOnFinish` to true; top-level calls have no parent callback.
+**`send_agent_prompt`** — `{ agentId, prompt }`. Use for follow-ups to an existing agent. Queues the prompt until the recipient has no active turn or pending permission, and returns after durable queue acceptance. Set `interrupt: true` only when you intend to cancel the current turn. Agent-scoped calls default `notifyOnFinish` to true; top-level calls have no parent callback.
 
 **`update_agent`** — `{ agentId, name?, labels?, settings? }`. Use `settings` for runtime changes on an existing agent: `modeId`, `model`, `thinkingOptionId`, and provider-specific `features`. For Codex fast mode, pass `settings: { features: { "fast_mode": true } }`.
 
@@ -108,7 +108,7 @@ Schedules have the full list/inspect/update/pause/resume/run-once/log/delete sur
 
 Agents take time — 10–30+ minutes is routine. Favor asynchronous workflows.
 
-`create_agent` and `send_agent_prompt` return after startup or dispatch acknowledgement in both MCP scopes. Top-level callers have no parent callback; observe completion through status/activity tools or SDK/RPC subscriptions and wait APIs.
+`create_agent` returns after startup acknowledgement; `send_agent_prompt` returns after durable queue acceptance. A queued acknowledgement does not mean the recipient has started or completed the prompt. Top-level callers have no parent callback; observe completion through status/activity tools or SDK/RPC subscriptions and wait APIs.
 
 For agent-scoped `create_agent` and `send_agent_prompt`, leave `notifyOnFinish` omitted or set it to `true` unless the work is truly fire-and-forget. You will get notified when the target agent finishes, errors, or needs permission. Move on to other work. The notification arrives on its own.
 
@@ -129,6 +129,8 @@ paseo ls
 paseo schedule create --cron "*/15 * * * *" "ping main build"
 paseo heartbeat create --cron "*/15 * * * *" "check the build"
 ```
+
+`paseo send` queues by default. `--no-wait` returns after acceptance; `--wait` observes that message’s exact execution. Use `--interrupt` only for deliberate cancellation. Completion notifications also wait until the recipient is available. Preserve message IDs after connection failures and inspect their exact execution before retrying.
 
 Discover with `paseo --help` and `paseo <cmd> --help`.
 

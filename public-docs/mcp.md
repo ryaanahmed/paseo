@@ -90,7 +90,7 @@ MCP does not expose an agent-detach tool. Detaching is a manual user action in t
 | Tool                 | Function                                                                                                                                                       |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `create_agent`       | Create an agent, optionally placing it in an existing workspace with `workspaceId`. Use `initialPrompt` to start work; returns without waiting for completion. |
-| `send_agent_prompt`  | Send a prompt using `agentId` and `prompt`; returns without waiting for completion.                                                                            |
+| `send_agent_prompt`  | Queue a prompt using `agentId` and `prompt`; returns after acceptance. Set `interrupt: true` to cancel the current turn.                                       |
 | `get_agent_status`   | Return the latest snapshot for an agent.                                                                                                                       |
 | `list_agents`        | List recent agents as compact metadata; `includeBackground: true` includes background work.                                                                    |
 | `cancel_agent`       | Abort an agent's current run but keep the agent alive.                                                                                                         |

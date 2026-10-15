@@ -3,6 +3,7 @@ import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import {
   DaemonClient,
+  AgentMessageRejectedError,
   supportsUsageReports,
   type DaemonClientTrace,
   type CreateAgentRequestOptions,
@@ -7494,7 +7495,9 @@ test.each([false, true])(
     });
     clients.push(client);
     const connecting = client.connect();
-    transport.triggerOpen({ features: { agentMessageProvenance: supported } });
+    transport.triggerOpen({
+      features: { agentMessageProvenance: supported, agentMessageQueue: true },
+    });
     await connecting;
     if (!supported) {
       await expect(
@@ -7513,6 +7516,7 @@ test.each([false, true])(
       messageId: "delivery",
     });
     expect(request.sourceAgentId).toBe(supported ? "server::sender" : undefined);
+    expect(request.activeTurnBehavior).toBe(supported ? "queue" : undefined);
     transport.triggerMessage(
       wrapSessionMessage({
         type: "send_agent_message_response",
@@ -7527,3 +7531,70 @@ test.each([false, true])(
     await send;
   },
 );
+
+test("queue delivery refuses old hosts before sending, while explicit interruption still works", async () => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "queue-capability",
+    transportFactory: () => transport.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  transport.triggerOpen({ features: { agentMessageProvenance: true } });
+  await connecting;
+  await expect(
+    client.sendAgentMessage("recipient", "queued", { activeTurnBehavior: "queue" }),
+  ).rejects.toThrow("Update the Paseo host to queue messages");
+  await expect(
+    client.sendAgentMessage("recipient", "queued", { sourceAgentId: "sender" }),
+  ).rejects.toThrow("Update the Paseo host to queue messages");
+  expect(transport.sent).toHaveLength(0);
+  await expect(
+    client.sendAgentMessage("recipient", "queued", { activeTurnBehavior: "queue" }),
+  ).rejects.toBeInstanceOf(AgentMessageRejectedError);
+
+  const sent = client.sendAgentMessage("recipient", "interrupt", {
+    sourceAgentId: "sender",
+    activeTurnBehavior: "interrupt",
+  });
+  const request = parseSentFrame(transport.sent[0]);
+  expect(request.activeTurnBehavior).toBe("interrupt");
+  transport.triggerMessage(
+    wrapSessionMessage({
+      type: "send_agent_message_response",
+      payload: { requestId: request.requestId, agentId: "recipient", accepted: true, error: null },
+    }),
+  );
+  await sent;
+});
+
+test("queue acknowledgement remains distinguishable from execution completion", async () => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "queue-ack",
+    transportFactory: () => transport.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  transport.triggerOpen({ features: { agentMessageQueue: true } });
+  await connecting;
+  const sent = client.sendAgentMessage("recipient", "queued", {
+    messageId: "submission",
+    activeTurnBehavior: "queue",
+  });
+  const request = parseSentFrame(transport.sent[0]);
+  expect(request).toMatchObject({ messageId: "submission", activeTurnBehavior: "queue" });
+  const payload = {
+    requestId: request.requestId,
+    agentId: "recipient",
+    accepted: true,
+    queued: true,
+    error: null,
+  };
+  transport.triggerMessage(wrapSessionMessage({ type: "send_agent_message_response", payload }));
+  await expect(sent).resolves.toEqual(payload);
+});

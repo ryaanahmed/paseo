@@ -2,11 +2,38 @@ import {
   AgentStreamEventPayloadSchema,
   AgentTimelineEntryPayloadSchema,
   SendAgentMessageRequestSchema,
+  SendAgentMessageResponseMessageSchema,
 } from "./messages";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 describe("send_agent_message_request active-turn behavior", () => {
+  it("accepts queued delivery and distinguishes acceptance from execution", () => {
+    expect(
+      SendAgentMessageRequestSchema.parse({
+        type: "send_agent_message_request",
+        requestId: "queued-request",
+        agentId: "agent-1",
+        messageId: "submission-1",
+        text: "Run after the current turn",
+        activeTurnBehavior: "queue",
+      }).activeTurnBehavior,
+    ).toBe("queue");
+    const acknowledgement = {
+      type: "send_agent_message_response",
+      payload: { requestId: "queued-request", agentId: "agent-1", accepted: true, error: null },
+    };
+    expect(
+      SendAgentMessageResponseMessageSchema.parse(acknowledgement).payload.queued,
+    ).toBeUndefined();
+    expect(
+      SendAgentMessageResponseMessageSchema.parse({
+        ...acknowledgement,
+        payload: { ...acknowledgement.payload, queued: true },
+      }).payload.queued,
+    ).toBe(true);
+  });
+
   it("accepts an optional steer intent while retaining interrupt compatibility", () => {
     expect(
       SendAgentMessageRequestSchema.parse({

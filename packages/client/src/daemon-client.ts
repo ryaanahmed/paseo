@@ -33,6 +33,7 @@ import { validateWSOutboundMessage } from "@getpaseo/protocol/validation/ws-outb
 import type {
   AgentStreamEventPayload,
   AgentSnapshotPayload,
+  SendAgentMessageResponseMessage,
   ProjectPlacementPayload,
   AgentPermissionResolvedMessage,
   CreateAgentRequestMessage,
@@ -427,7 +428,7 @@ export interface DaemonClientTrace {
 export interface SendMessageOptions {
   sourceAgentId?: string;
   messageId?: string;
-  /** Mid-turn behavior: reject refuses without interrupting; omitted means interrupt. */
+  /** Agent-originated messages default to queue; ordinary human sends retain interrupt behavior. */
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: SendAgentMessageRequest["attachments"];
@@ -992,6 +993,14 @@ type CorrelatedResponsePayloads = {
 };
 type CorrelatedResponsePayload<TType extends CorrelatedResponseType> =
   CorrelatedResponsePayloads[TType];
+
+// These failures establish that this message was not accepted, unlike a missing acknowledgement.
+export class AgentMessageRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentMessageRejectedError";
+  }
+}
 
 export class DaemonConnectionError extends Error {
   constructor(
@@ -3515,16 +3524,28 @@ export class DaemonClient {
   // Reject unsupported delivery semantics before submitting a message.
   private requireMessageCapabilities(options?: SendMessageOptions): void {
     if (
+      options?.activeTurnBehavior === "queue" &&
+      this.lastServerInfoMessage?.features?.agentMessageQueue !== true
+    ) {
+      throw new AgentMessageRejectedError(
+        "Update the Paseo host to queue messages without interrupting an active turn.",
+      );
+    }
+    if (
       options?.sourceAgentId &&
       this.lastServerInfoMessage?.features?.agentMessageProvenance !== true
     ) {
-      throw new Error("Update the Paseo host to send messages with agent provenance.");
+      throw new AgentMessageRejectedError(
+        "Update the Paseo host to send messages with agent provenance.",
+      );
     }
     if (
       options?.activeTurnBehavior === "reject" &&
       this.lastServerInfoMessage?.features?.agentExecutionOutcomes !== true
     ) {
-      throw new Error("Update the host to send without interrupting an active turn.");
+      throw new AgentMessageRejectedError(
+        "Update the host to send without interrupting an active turn.",
+      );
     }
   }
 
@@ -3532,24 +3553,27 @@ export class DaemonClient {
     agentId: string,
     text: string,
     options?: SendMessageOptions,
-  ): Promise<void> {
-    this.requireMessageCapabilities(options);
+  ): Promise<SendAgentMessageResponseMessage["payload"]> {
+    const activeTurnBehavior =
+      options?.activeTurnBehavior ?? (options?.sourceAgentId ? "queue" : undefined);
+    this.requireMessageCapabilities({ ...options, activeTurnBehavior });
     const requestId = this.createRequestId();
     const messageId = options?.messageId ?? crypto.randomUUID();
-    const message = SessionInboundMessageSchema.parse({
+    const parsed = SessionInboundMessageSchema.safeParse({
       type: "send_agent_message_request",
       requestId,
       agentId,
       text,
       sourceAgentId: options?.sourceAgentId,
       ...(messageId ? { messageId } : {}),
-      ...(options?.activeTurnBehavior ? { activeTurnBehavior: options.activeTurnBehavior } : {}),
+      ...(activeTurnBehavior ? { activeTurnBehavior } : {}),
       ...(options?.images ? { images: options.images } : {}),
       ...(options?.attachments ? { attachments: options.attachments } : {}),
     });
+    if (!parsed.success) throw new AgentMessageRejectedError(parsed.error.message);
     const payload = await this.sendRequest({
       requestId,
-      message,
+      message: parsed.data,
       options: { skipQueue: true },
       select: (msg) => {
         if (msg.type !== "send_agent_message_response") {
@@ -3562,8 +3586,9 @@ export class DaemonClient {
       },
     });
     if (!payload.accepted) {
-      throw new Error(payload.error ?? "sendAgentMessage rejected");
+      throw new AgentMessageRejectedError(payload.error ?? "sendAgentMessage rejected");
     }
+    return payload;
   }
 
   async sendMessage(agentId: string, text: string, options?: SendMessageOptions): Promise<void> {
