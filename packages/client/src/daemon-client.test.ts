@@ -1032,6 +1032,7 @@ test("advertises client capabilities in hello", async () => {
       compact_provider_snapshots: true,
       custom_mode_icons: true,
       project_updates: true,
+      background_projects: true,
       provider_subagents: true,
       projected_subagent_timeline: true,
       reasoning_merge_enum: true,
