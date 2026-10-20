@@ -21,7 +21,7 @@ For a local daemon, `project create` defaults to the current directory and resol
 
 ## Workspaces
 
-**`create_workspace`** — create a workspace independently of any agent. Required: `isolation` (`local` or `worktree`). Worktree isolation supports `mode: "branch-off" | "checkout-branch" | "checkout-pr"`: use `branchName`/`baseBranch` for a new branch, `branch` for an existing branch, or `prNumber` plus optional `forge`/`projectPath` for a change request. `worktreeSlug` controls the managed path. Returns the workspace descriptor centered on `workspaceId`.
+**`create_workspace`** — create a workspace independently of any agent. Required: `isolation` (`local` or `worktree`). Worktree isolation supports `mode: "branch-off" | "checkout-branch" | "checkout-pr"`: use `branchName`/`baseBranch` for a new branch, `branch` for an existing branch, or `prNumber` plus optional `forge` for a change request. Use `path` for a local directory or source checkout and `projectId` for the owning project; when no path is supplied, a worktree may resolve its source from `projectId`. `worktreeSlug` controls the managed path. Returns the workspace descriptor centered on `workspaceId`.
 
 `background: true` hides a workspace from default lists and the sidebar while its contents remain durable and accessible; omit `background` to inherit your current workspace’s value (false without a caller), and override it only when the user explicitly asks.
 
@@ -63,7 +63,7 @@ Detach is an explicit user action in the subagents track, not an agent tool. A c
 
 Agent-scoped `create_agent` defaults `notifyOnFinish` to true. Set it to `false` only for truly fire-and-forget agents.
 
-**`send_agent_prompt`** — `{ agentId, prompt }`. Use for follow-ups to an existing agent. Queues the prompt until the recipient has no active turn or pending permission, and returns after durable queue acceptance. Set `interrupt: true` only when you intend to cancel the current turn. Agent-scoped calls default `notifyOnFinish` to true; top-level calls have no parent callback.
+**`send_agent_prompt`** — `{ agentId, prompt }`. Use for follow-ups to an existing agent. Queues the prompt until the recipient has no active turn or pending permission, and returns after durable queue acceptance. Set `interrupt: true` only when you intend to cancel the current turn. Agent-scoped calls default `notifyOnFinish` to true; top-level calls have no parent callback. Explicit `activeTurnBehavior: "steer"` or `"interrupt"` opts into upstream delivery semantics; steering may fall back to interruption. Do not combine `interrupt: true` with a conflicting behavior. CLI sends accept `--behavior queue|steer|interrupt` and default to queue.
 
 **`update_agent`** — `{ agentId, name?, labels?, settings? }`. Use `settings` for runtime changes on an existing agent: `modeId`, `model`, `thinkingOptionId`, and provider-specific `features`. For Codex fast mode, pass `settings: { features: { "fast_mode": true } }`.
 

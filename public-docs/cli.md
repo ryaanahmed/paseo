@@ -228,11 +228,12 @@ The output includes each script's lifecycle and supervised terminal ID. Services
 Create and manage trusted plugins on a daemon:
 
 ```bash
-paseo plugin init /absolute/path/to/plugin
-paseo plugin install /absolute/path/to/plugin
-paseo plugin add owner/repository
+paseo plugin init ./plugin
+paseo plugin install ./plugin
+paseo plugin add owner/slug
+paseo plugin add git:owner/repository
 paseo plugin add https://gitlab.com/group/repository.git --ref main
-paseo plugin add owner/monorepo:plugins/review
+paseo plugin add git:owner/monorepo:plugins/review
 paseo plugin ls [id]
 paseo plugin update my-plugin
 paseo plugin update --all
@@ -243,8 +244,17 @@ paseo plugin enable my-plugin
 paseo plugin remove my-plugin
 ```
 
-GitHub shorthand checks an existing host directory first. Append `:<directory>` for a plugin in a
-monorepo. `paseo plugin ls [id]` does not contact the remote. `paseo plugin logs <id>` returns the
+`paseo plugin reload <id>` reports the result of the reload itself: it waits while the daemon stops
+and starts the plugin, however long that takes, and it queues behind the daemon's other plugin work.
+Cancelling the command or losing the connection does not stop the daemon's work, and no listing or
+log entry settles what a cancelled reload did — the [Plugin reference](/docs/plugins/reference)
+covers those interim states. Running the reload again is what reports the result: it waits behind the
+outstanding one, then stops and starts the plugin once more.
+
+Bare `owner/slug` installs a reviewed registry listing. Use `git:owner/repository` for GitHub
+source, or `./plugin` for a local directory. Append `:<directory>` for a plugin in a monorepo.
+
+`paseo plugin ls [id]` does not contact the remote. `paseo plugin logs <id>` returns the
 plugin's recent daemon-side stdout and stderr. Add `--json` for structured entries, or run
 `paseo --host <target> plugin logs <id>` for another daemon. See the
 [Plugin reference](/docs/plugins/reference) for installation, trust, lifecycle, and log-retention
@@ -286,6 +296,8 @@ paseo send <id> --interrupt "stop the current task and investigate this failure"
 `--interrupt` explicitly cancels the current turn. `--no-wait` controls observation only: it returns after queue acceptance. Without it, the CLI waits for the submitted message’s exact execution, including time spent queued. An acceptance acknowledgement is not completion.
 
 If a connection fails during submission or observation, keep the reported agent and message IDs and inspect the exact execution before submitting another message. A missing execution record can mean the message is still queued.
+
+`--behavior queue|steer|interrupt` explicitly selects delivery behavior. The maintained fork defaults to `queue`, including agent-originated sends. `--interrupt` selects interruption and cannot be combined with `--behavior`. Explicit steering can fall back to interruption when the provider cannot steer.
 
 ## Viewing logs
 

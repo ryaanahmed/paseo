@@ -193,6 +193,32 @@ it("accepts --interrupt with --no-wait and defaults to waiting", () => {
   expect(command.opts()).toMatchObject({ interrupt: true, wait: false });
 });
 
+it.each(["queue", "steer", "interrupt"] as const)(
+  "honors explicit %s behavior without changing --no-wait",
+  async (behavior) => {
+    vi.stubEnv("PASEO_AGENT_ID", "sender");
+    const client = recordingClient();
+    const command = addSendOptions(new Command());
+    command.parse(["recipient", "hello", "--behavior", behavior, "--no-wait"], { from: "user" });
+    await runSendCommand("recipient", "hello", { daemonTarget, ...command.opts() }, command);
+    expect(client.send.mock.calls[0]?.[2]).toMatchObject({
+      activeTurnBehavior: behavior,
+      sourceAgentId: "sender",
+    });
+    expect(client.wait).not.toHaveBeenCalled();
+    expect(client.execution).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects conflicting delivery options before submitting a message", () => {
+  const command = addSendOptions(new Command())
+    .exitOverride()
+    .configureOutput({ writeErr: () => {} });
+  expect(() =>
+    command.parse(["recipient", "hello", "--interrupt", "--behavior", "steer"], { from: "user" }),
+  ).toThrow("cannot be used with option");
+});
+
 it("preserves durable acceptance when the connection drops while observing execution", async () => {
   const client = recordingClient();
   client.execution.mockRejectedValue(

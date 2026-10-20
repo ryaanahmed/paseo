@@ -1094,8 +1094,10 @@ test("orders a concurrent replacement after a pending accepted steer", async () 
       }
     })();
     await consumeInitial;
-    await vi.waitFor(() => expect(session.startCount).toBe(2));
+    // Provider entry precedes the manager's accepted-turn timeline publication.
+    await manager.waitForAgentRunStart(agent.id);
 
+    expect(session.startCount).toBe(2);
     expect(session.interruptCount).toBe(1);
     expect(
       manager
@@ -11317,6 +11319,41 @@ test("authoritative timeline records a daemon-handled submitted prompt before it
   } finally {
     await manager.flush().catch(() => undefined);
     await storage.flush().catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("tryRunOutOfBand gives providers the command another agent sent, not its envelope", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-agent-out-of-band-"));
+  const seenPrompts: AgentPromptInput[] = [];
+
+  class SlashCommandSession extends TestAgentSession {
+    override tryHandleOutOfBand(prompt: AgentPromptInput) {
+      seenPrompts.push(prompt);
+      return prompt === "/handled" ? { run: async () => {} } : null;
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig) {
+      return new SlashCommandSession(config);
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+
+  try {
+    const fromAgent = prepareAgentMessage("/handled", { kind: "agent-message", agentId: "sender" });
+    expect(manager.tryRunOutOfBand(agent.id, fromAgent.prompt)).toBe(true);
+    expect(seenPrompts).toEqual(["/handled"]);
+
+    // A human who pastes an envelope gets it quoted, and it stays a plain prompt.
+    const pasted = prepareAgentMessage(String(fromAgent.prompt));
+    expect(manager.tryRunOutOfBand(agent.id, pasted.prompt)).toBe(false);
+    expect(seenPrompts.at(-1)).toBe(pasted.prompt);
+  } finally {
+    await manager.closeAgent(agent.id);
     rmSync(workdir, { recursive: true, force: true });
   }
 });

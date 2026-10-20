@@ -1004,6 +1004,7 @@ describe("project command-center RPCs", () => {
 
       expect(existsSync(directoryPath)).toBe(true);
       expect(projectAllocation).toHaveBeenCalledWith({
+        background: false,
         rootPath: directoryPath,
         kind: "non_git",
         displayName: "new-project",
@@ -5897,8 +5898,7 @@ test.each([
       title: "Coordinator",
       archivedAt: state === "archived" ? "2026-10-12T12:00:00.000Z" : null,
     });
-    const resumeAgentFromPersistence = vi.fn();
-    const createAgent = vi.fn();
+    const resumeAgent = vi.fn();
     const streamAgent = vi.fn();
     const replaceAgentRun = vi.fn();
     const session = createSessionForTest({
@@ -5935,8 +5935,7 @@ test.each([
       });
       expect(readdirSync(receiptDirectory)).toEqual([]);
     }
-    expect(resumeAgentFromPersistence).not.toHaveBeenCalled();
-    expect(createAgent).not.toHaveBeenCalled();
+    expect(resumeAgent).not.toHaveBeenCalled();
     expect(streamAgent).not.toHaveBeenCalled();
     expect(replaceAgentRun).not.toHaveBeenCalled();
   } finally {

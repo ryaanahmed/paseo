@@ -1,1 +1,1 @@
-{ "id": "durable-completion", "requirements": { "paseo": ">=0.11.2 <0.12.0" } }
+{ "id": "durable-completion", "requirements": { "paseo": ">=0.11.2 <0.13.0" } }

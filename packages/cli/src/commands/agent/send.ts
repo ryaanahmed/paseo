@@ -1,7 +1,8 @@
 import { AgentMessageRejectedError } from "@getpaseo/client/internal/daemon-client";
 import { randomUUID } from "node:crypto";
 import type { AgentExecution } from "@getpaseo/protocol/agent-execution";
-import { type Command } from "commander";
+import { type Command, Option } from "commander";
+import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { collectMultiple } from "../../utils/command-options.js";
 import { connectToDaemon } from "../../utils/client.js";
 import type {
@@ -34,6 +35,7 @@ export const agentSendSchema: OutputSchema<AgentSendResult> = {
 };
 
 export interface AgentSendOptions extends CommandOptions {
+  behavior?: ActiveTurnBehavior;
   wait?: boolean;
   interrupt?: boolean;
   image?: string[];
@@ -49,7 +51,17 @@ export function addSendOptions(cmd: Command): Command {
     .option("--prompt <text>", "Provide the message inline as a flag")
     .option("--prompt-file <path>", "Read the message from a UTF-8 text file")
     .option("--image <path>", "Attach image(s) to the message", collectMultiple, [])
-    .option("--interrupt", "Interrupt the active turn instead of queuing this message")
+    .addOption(
+      new Option("--behavior <behavior>", "Active-turn behavior (default: queue)")
+        .choices(["queue", "interrupt", "steer"])
+        .conflicts("interrupt"),
+    )
+    .addOption(
+      new Option(
+        "--interrupt",
+        "Interrupt the active turn instead of queuing this message",
+      ).conflicts("behavior"),
+    )
     .option("--wait", "Wait for this message to finish", true)
     .option("--no-wait", "Return after acceptance without waiting for completion");
 }
@@ -231,6 +243,16 @@ function buildAcceptedSendResult(input: AcceptedSendInput): AgentSendResult {
   };
 }
 
+function resolveSendBehavior(options: AgentSendOptions): ActiveTurnBehavior {
+  if (options.behavior && options.interrupt) {
+    throw {
+      code: "CONFLICTING_SEND_BEHAVIOR",
+      message: "--interrupt cannot be combined with --behavior",
+    } satisfies CommandError;
+  }
+  return options.behavior ?? (options.interrupt ? "interrupt" : "queue");
+}
+
 export async function runSendCommand(
   agentIdArg: string,
   prompt: string | undefined,
@@ -253,6 +275,7 @@ export async function runSendCommand(
     promptFile: options.promptFile,
   });
 
+  const activeTurnBehavior = resolveSendBehavior(options);
   const client = await connectToDaemon({ target: options.daemonTarget });
   let attempted: { agentId: string; messageId: string } | null = null;
   let accepted: { agentId: string; messageId: string } | null = null;
@@ -266,7 +289,6 @@ export async function runSendCommand(
     if (!recipient) throw new AgentMessageRejectedError(`Agent not found: ${agentIdArg}`);
     const messageId = randomUUID();
     attempted = { agentId: recipient.agent.id, messageId };
-    const activeTurnBehavior = options.interrupt ? "interrupt" : "queue";
     const acknowledgement = await client.sendAgentMessage(recipient.agent.id, promptInput, {
       images,
       messageId,

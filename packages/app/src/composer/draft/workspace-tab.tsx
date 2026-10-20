@@ -6,6 +6,7 @@ import { ComposerDock } from "@/composer/dock";
 import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import invariant from "tiny-invariant";
 import { Composer } from "@/composer";
+import { useComposerEditingSession, useComposerFullscreen } from "@/composer/editing-session";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { ComposerImportPill } from "@/composer/draft/import-pill";
 import { COMPOSER_PILL_CLEARANCE } from "@/composer/pill-styles";
@@ -15,7 +16,7 @@ import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import type { CreateAgentInitialValues } from "@/hooks/use-agent-form-state";
 import { useDraftAgentCreateFlow, type DraftCreateAttempt } from "@/composer/draft/create-flow";
 import { resolveTurnPresentation, TURN_LIVENESS_IDLE } from "@/timeline/turn-liveness";
-import { useHostRuntimeClient } from "@/runtime/host-runtime";
+import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { buildWorkspaceDraftAgentConfig } from "@/screens/workspace/workspace-draft-agent-config";
 import { buildDraftStoreKey } from "@/stores/draft-keys";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
@@ -89,46 +90,30 @@ function resolveAutoSubmitConfig(
   };
 }
 
-// Reconcile the form's selected mode against the currently discovered modes.
-// The mode picker displays modeOptions[0] when the stored mode isn't in the
-// list (e.g. a globally-remembered "plan" that this workspace's OpenCode config
-// no longer defines), so the submitted mode must match that display — otherwise
-// we'd send a stale mode the provider rejects while the UI showed a valid one.
-function reconcileSelectedMode(modeOptionIds: readonly string[], selectedMode: string): string {
-  if (modeOptionIds.length === 0) {
-    return "";
-  }
-  return modeOptionIds.includes(selectedMode) ? selectedMode : (modeOptionIds[0] ?? "");
-}
-
 function resolveDraftModeIdOverride(input: {
   autoSubmitConfig: AutoSubmitConfig | null;
-  modeOptionIds: readonly string[];
-  selectedMode: string;
+  effectiveModeId: string;
 }): { modeId: string } | Record<string, never> {
-  const { autoSubmitConfig, modeOptionIds, selectedMode } = input;
+  const { autoSubmitConfig, effectiveModeId } = input;
   if (autoSubmitConfig?.modeId) {
     return { modeId: autoSubmitConfig.modeId };
   }
-  const reconciled = reconcileSelectedMode(modeOptionIds, selectedMode);
-  if (reconciled !== "") {
-    return { modeId: reconciled };
+  if (effectiveModeId !== "") {
+    return { modeId: effectiveModeId };
   }
   return {};
 }
 
 function resolveDraftModeId(input: {
   autoSubmitConfig: AutoSubmitConfig | null;
-  modeOptionIds: readonly string[];
-  selectedMode: string;
+  effectiveModeId: string;
 }): string | null {
-  const { autoSubmitConfig, modeOptionIds, selectedMode } = input;
+  const { autoSubmitConfig, effectiveModeId } = input;
   if (autoSubmitConfig?.modeId !== undefined) {
     return autoSubmitConfig.modeId;
   }
-  const reconciled = reconcileSelectedMode(modeOptionIds, selectedMode);
-  if (reconciled !== "") {
-    return reconciled;
+  if (effectiveModeId !== "") {
+    return effectiveModeId;
   }
   return null;
 }
@@ -154,8 +139,7 @@ async function submitDraftCreateRequest(input: {
   composerState: {
     selectedProvider: string | null;
     selectedProfileId?: string;
-    selectedMode: string;
-    modeOptions: readonly { id: string }[];
+    effectiveModeId: string;
     effectiveModelId: string | null;
     effectiveThinkingOptionId: string | null;
     featureValues: Record<string, unknown> | undefined;
@@ -188,8 +172,7 @@ async function submitDraftCreateRequest(input: {
   }
   const modeIdOverride = resolveDraftModeIdOverride({
     autoSubmitConfig,
-    modeOptionIds: composerState.modeOptions.map((mode) => mode.id),
-    selectedMode: composerState.selectedMode,
+    effectiveModeId: composerState.effectiveModeId,
   });
   const config = buildWorkspaceDraftAgentConfig({
     provider,
@@ -231,8 +214,7 @@ function buildDraftAgentSnapshot(input: {
   composerState: {
     effectiveModelId: string | null;
     effectiveThinkingOptionId: string | null;
-    modeOptions: readonly { id: string }[];
-    selectedMode: string;
+    effectiveModeId: string;
     selectedProvider: string | null;
     agentControls: { features?: Agent["features"] };
   };
@@ -246,8 +228,7 @@ function buildDraftAgentSnapshot(input: {
     autoSubmitConfig?.thinkingOptionId ?? (composerState.effectiveThinkingOptionId || null);
   const modeId = resolveDraftModeId({
     autoSubmitConfig,
-    modeOptionIds: composerState.modeOptions.map((mode) => mode.id),
-    selectedMode: composerState.selectedMode,
+    effectiveModeId: composerState.effectiveModeId,
   });
   const provider = autoSubmitConfig?.provider ?? composerState.selectedProvider;
   if (!provider) {
@@ -337,6 +318,7 @@ export function WorkspaceDraftAgentTab({
 }: WorkspaceDraftAgentTabProps) {
   const { t } = useTranslation();
   const client = useHostRuntimeClient(serverId);
+  const isConnected = useHostRuntimeIsConnected(serverId);
   const workspaceFields = useWorkspaceFields(serverId, workspaceId, (w) => ({
     workspaceDirectory: w.workspaceDirectory,
     id: w.id,
@@ -418,6 +400,8 @@ export function WorkspaceDraftAgentTab({
   }, [pendingCreateAttempt]);
   const allowsEmptyAutoSubmit = pendingAutoSubmit?.allowEmptyText === true;
   const isCompactFormFactor = useIsCompactFormFactor();
+  const editingSession = useComposerEditingSession("chat");
+  const isComposerFullscreen = useComposerFullscreen(editingSession);
   const { onLayout: onInputAreaLayout, isBelow: isCompactComposerLayout } = useContainerWidthBelow(
     COMPACT_FORM_FACTOR_WIDTH,
     { initialIsBelow: isCompactFormFactor },
@@ -475,7 +459,7 @@ export function WorkspaceDraftAgentTab({
         composerState,
         autoSubmitConfig,
         workspaceDirectory: draftWorkingDirectory,
-        hasClient: Boolean(client),
+        isConnected,
       });
     },
     onBeforeSubmit: async () => {
@@ -661,10 +645,10 @@ export function WorkspaceDraftAgentTab({
 
   return (
     <FileDropZone style={styles.container}>
-      <ComposerDock>
+      <ComposerDock fullscreen={isComposerFullscreen}>
         {dockContent}
         <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
-          {importPillPress ? (
+          {importPillPress && !isComposerFullscreen ? (
             <View style={styles.importPillRow}>
               <View style={styles.importPillContent}>
                 <ComposerImportPill onPress={importPillPress} />
@@ -688,6 +672,7 @@ export function WorkspaceDraftAgentTab({
             onChangeAttachments={draftInput.setAttachments}
             cwd={composerState.workingDir}
             clearDraft={draftInput.clear}
+            editingSession={editingSession}
             autoFocus={shouldAutoFocusWorkspaceDraftComposer({ isPaneFocused, isSubmitting })}
             autoFocusKey={String(draftInput.attachmentFocusRequestId)}
             onFocusInput={handleFocusInputCallback}
@@ -705,6 +690,8 @@ const animatedStaticStyles = RNStyleSheet.create({
   inputAreaWrapper: {
     width: "100%",
     flexShrink: 1,
+    // Content-sized inline; fills the dock's fullscreen slot.
+    flexGrow: 1,
   },
 });
 
