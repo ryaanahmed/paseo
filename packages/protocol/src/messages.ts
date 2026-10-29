@@ -1,5 +1,10 @@
 import { AgentMessageSchema } from "./agent-message.js";
-import { AgentExecutionSchema, AgentExecutionQuerySchema } from "./agent-execution.js";
+import {
+  AgentExecutionSchema,
+  AgentExecutionQuerySchema,
+  AgentRuntimeRetireInputSchema,
+  AgentRuntimeRetireResultSchema,
+} from "./agent-execution.js";
 import { ContextPolicySchema, ContextPolicyStatusSchema } from "./agent-context-policy.js";
 import { PluginRegistryIdentitySchema } from "./plugin-registry.js";
 import { AgentProfileSchema, AgentRoleSchema, AgentSkillSelectionSchema } from "./agent-profile.js";
@@ -832,6 +837,7 @@ export const AgentSnapshotPayloadSchema = z.object({
   updatedAt: z.string(),
   lastUserMessageAt: z.string().nullable(),
   status: AgentStatusSchema,
+  runtimeLoaded: z.boolean().optional(),
   activeTurn: AgentActiveTurnPayloadSchema.nullable().optional(),
   capabilities: AgentCapabilityFlagsSchema,
   currentModeId: z.string().nullable(),
@@ -1360,6 +1366,21 @@ export const FetchRecentProviderSessionsRequestMessageSchema = z.object({
   since: z.string().optional(),
   limit: z.number().int().positive().max(200).optional(),
   query: z.string().optional(),
+});
+
+export const AgentRuntimeRetireRequestSchema = z.object({
+  type: z.literal("agent.runtime.retire.request"),
+  requestId: z.string(),
+  agentId: z.string().min(1),
+  expected: AgentRuntimeRetireInputSchema,
+});
+export const AgentRuntimeRetireResponseSchema = z.object({
+  type: z.literal("agent.runtime.retire.response"),
+  payload: z.object({
+    requestId: z.string(),
+    result: AgentRuntimeRetireResultSchema.nullable(),
+    error: z.string().nullable(),
+  }),
 });
 
 export const AgentExecutionGetRequestSchema = z.object({
@@ -3229,6 +3250,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ProjectListRequestMessageSchema,
   FetchAgentRequestMessageSchema,
   AgentExecutionGetRequestSchema,
+  AgentRuntimeRetireRequestSchema,
   DeleteAgentRequestMessageSchema,
   ArchiveAgentRequestMessageSchema,
   CloseItemsRequestMessageSchema,
@@ -3743,6 +3765,7 @@ export const ServerInfoStatusPayloadSchema = z
         agentRoles: z.boolean().optional(),
         agentContextPolicy: z.boolean().optional(),
         agentExecutionOutcomes: z.boolean().optional(),
+        agentRuntimeRetirement: z.boolean().optional(),
         agentMessageQueue: z.boolean().optional(),
         // COMPAT(canonicalSubmittedPrompts): added in v0.2.6, remove gate after 2027-01-30.
         canonicalSubmittedPrompts: z.boolean().optional(),
@@ -6953,6 +6976,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ArchiveWorkspaceResponseMessageSchema,
   FetchAgentResponseMessageSchema,
   AgentExecutionGetResponseSchema,
+  AgentRuntimeRetireResponseSchema,
   FetchAgentTimelineResponseMessageSchema,
   AgentTimelineReplacementMessageSchema,
   AgentTimelineSearchResponseMessageSchema,

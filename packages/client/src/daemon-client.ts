@@ -1,4 +1,9 @@
-import type { AgentExecution, AgentExecutionQuery } from "@getpaseo/protocol/agent-execution";
+import type {
+  AgentExecution,
+  AgentExecutionQuery,
+  AgentRuntimeRetireInput,
+  AgentRuntimeRetireResult,
+} from "@getpaseo/protocol/agent-execution";
 import { legacyUsageIcon } from "./legacy-usage-icons.js";
 import { subscribeTimeline, type TimelineMessage } from "./timeline-subscription/index.js";
 import { ProviderSnapshotUpdates } from "./provider-snapshots/index.js";
@@ -2798,12 +2803,34 @@ export class DaemonClient {
     });
   }
 
+  async retireAgentRuntime(
+    agentId: string,
+    expected: AgentRuntimeRetireInput,
+  ): Promise<AgentRuntimeRetireResult> {
+    if (this.lastServerInfoMessage?.features?.agentRuntimeRetirement !== true) {
+      throw new Error("Update the host to retire idle agent runtimes.");
+    }
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.runtime.retire.response">({
+        message: { type: "agent.runtime.retire.request", agentId, expected },
+      });
+    if (payload.error || !payload.result)
+      throw new Error(payload.error ?? "Missing runtime retirement result");
+    return payload.result;
+  }
+
   async getAgentExecution(
     agentId: string,
     query: AgentExecutionQuery,
   ): Promise<AgentExecution | null> {
     if (this.lastServerInfoMessage?.features?.agentExecutionOutcomes !== true) {
       throw new Error("Update the host to query durable agent execution outcomes.");
+    }
+    if (
+      query.kind === "latest" &&
+      this.lastServerInfoMessage?.features?.agentRuntimeRetirement !== true
+    ) {
+      throw new Error("Update the host to query the latest exact agent execution.");
     }
     const payload =
       await this.sendNamespacedCorrelatedSessionRequest<"agent.execution.get.response">({

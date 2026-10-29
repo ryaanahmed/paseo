@@ -2648,6 +2648,8 @@ export class Session {
 
   private dispatchAgentRelationshipMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
+      case "agent.runtime.retire.request":
+        return this.handleRetireAgentRuntime(msg);
       case "agent.detach.request":
         return this.handleDetachAgentRequest(msg.agentId, msg.requestId);
       default:
@@ -7710,6 +7712,27 @@ export class Session {
           markedAgentId,
           success: false,
           error: message,
+        },
+      });
+    }
+  }
+
+  private async handleRetireAgentRuntime(
+    msg: Extract<SessionInboundMessage, { type: "agent.runtime.retire.request" }>,
+  ): Promise<void> {
+    try {
+      const result = await this.agentManager.retireAgentRuntime(msg.agentId, msg.expected);
+      this.emit({
+        type: "agent.runtime.retire.response",
+        payload: { requestId: msg.requestId, result, error: null },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.runtime.retire.response",
+        payload: {
+          requestId: msg.requestId,
+          result: null,
+          error: error instanceof Error ? error.message : String(error),
         },
       });
     }

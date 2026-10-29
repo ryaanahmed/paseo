@@ -58,6 +58,14 @@ export class AgentMessageQueue {
     return this.initialized;
   }
 
+  hasUncertainAdmission(agentId: string): boolean {
+    return [...this.records.values()].some(
+      (record) =>
+        record.agentId === agentId &&
+        (record.state === "dispatching" || record.state === "unknown"),
+    );
+  }
+
   async enqueue(input: {
     agentId: string;
     prompt: AgentPromptInput;

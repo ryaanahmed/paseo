@@ -98,3 +98,30 @@ test("session-open hooks reject changes to session identity instead of silently 
     ),
   ).rejects.toThrow("agent.session_open hooks can only change env");
 });
+
+test("runtime release hooks preserve disposal identity and propagate admission errors", async () => {
+  const hooks = new PluginHookHandlers(() => {});
+  const request = {
+    agentId: "worker",
+    executionId: "execution",
+    clientMessageId: "message",
+    turnId: "turn",
+    parentAgentId: "parent",
+    cwd: "/project",
+    physicalCloseProven: true,
+  };
+  const remove = hooks.before("agent.runtime_release", ({ request }) => ({
+    ...request,
+    agentId: "another",
+  }));
+  await expect(
+    hooks.invoke("changed", "before", "agent.runtime_release", request, paseo),
+  ).rejects.toThrow("cannot change disposal identity");
+  remove();
+  hooks.before("agent.runtime_release", async () => {
+    throw new Error("allocation store unavailable");
+  });
+  await expect(
+    hooks.invoke("failed", "before", "agent.runtime_release", request, paseo),
+  ).rejects.toThrow("allocation store unavailable");
+});

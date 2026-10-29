@@ -1793,6 +1793,7 @@ export class VoiceAssistantWebSocketServer {
         agentRoles: true,
         agentContextPolicy: true,
         agentExecutionOutcomes: true,
+        agentRuntimeRetirement: true,
         agentRequestReceipts: true,
         workspaceRequestReceipts: true,
         creationLifecycle: true,

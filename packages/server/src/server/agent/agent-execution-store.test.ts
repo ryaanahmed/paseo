@@ -99,3 +99,16 @@ test("durable records exclude prompt and error prose", async () => {
   const content = await readFile(path.join(directory, files[0]!), "utf8");
   expect(content).not.toContain("private");
 });
+
+test("latest execution refuses timestamp ties rather than choosing a replay predecessor", async () => {
+  const { store } = await fixture();
+  await store.create(record("first", { status: "completed" }));
+  expect((await store.get("worker", { kind: "latest" }))?.executionId).toBe("first");
+  await store.create(record("same-time", { status: "failed" }));
+  expect(await store.get("worker", { kind: "latest" })).toBeNull();
+  await store.create(record("newer", { status: "unknown", startedAt: "2026-10-12T12:01:00.000Z" }));
+  expect(await store.get("worker", { kind: "latest" })).toMatchObject({
+    executionId: "newer",
+    status: "unknown",
+  });
+});

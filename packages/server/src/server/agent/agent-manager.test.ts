@@ -24,7 +24,7 @@ import {
 } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
-import { toAgentPayload } from "./agent-projections.js";
+import { toAgentPayload, buildStoredAgentPayload } from "./agent-projections.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import { getOpenAgentTabLabel, PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { startAgentRun } from "./agent-prompt.js";
@@ -12444,5 +12444,348 @@ test("role snapshot survives reload and restart and cannot be added by resume ov
     await manager.closeAgent(unroled.id);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+async function retirementFixture(release: () => Promise<void> = async () => {}) {
+  const directory = mkdtempSync(join(tmpdir(), "paseo-retirement-"));
+  const registry = new AgentStorage(join(directory, "agents"), logger);
+  const executionStore = new AgentExecutionStore(join(directory, "executions"));
+  const timeline = new RecordingTimelineStore();
+  let closes = 0;
+  let providerSession: TestAgentSession;
+  let closeFailure = false;
+  let waitOnClose: Promise<void> | undefined;
+  const closeStarted = deferred<void>();
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      providerSession = new (class extends TestAgentSession {
+        override async close(): Promise<void> {
+          closes += 1;
+          closeStarted.resolve();
+          await waitOnClose;
+          if (closeFailure) throw new Error("close failed");
+        }
+      })(config);
+      return providerSession;
+    }
+  })();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry,
+    executionStore,
+    durableTimelineStore: timeline,
+    logger,
+    pluginLifecycle: {
+      emit() {},
+      async before(name, request) {
+        if (name === "agent.runtime_release") await release();
+        return request;
+      },
+    },
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+    workspaceId: undefined,
+    labels: { [PARENT_AGENT_ID_LABEL]: "coordinator", custom: "retained" },
+  });
+  const execution = {
+    agentId: agent.id,
+    executionId: "settled-execution",
+    provider: "codex",
+    clientMessageId: "settled-message",
+    turnId: "settled-turn",
+    status: "completed" as const,
+    startedAt: "2026-10-29T00:00:00.000Z",
+    updatedAt: "2026-10-29T00:01:00.000Z",
+    finishedAt: "2026-10-29T00:01:00.000Z",
+  };
+  await executionStore.create(execution);
+  const expected = {
+    executionId: execution.executionId,
+    clientMessageId: execution.clientMessageId,
+    turnId: execution.turnId,
+    parentAgentId: "coordinator",
+    cwd: directory,
+  };
+  return {
+    manager,
+    registry,
+    executionStore,
+    agent,
+    expected,
+    execution,
+    client,
+    timeline,
+    get closes() {
+      return closes;
+    },
+    emit(event: AgentStreamEvent) {
+      providerSession.pushEvent(event);
+    },
+    failClose() {
+      closeFailure = true;
+    },
+    holdClose(promise: Promise<void>) {
+      waitOnClose = promise;
+    },
+    closeStarted: closeStarted.promise,
+    async cleanup() {
+      await manager.closeAgent(agent.id).catch(() => undefined);
+      await manager.flush();
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+test("runtime retirement preserves exact outcomes, parentage and history while cold send can reload", async () => {
+  const f = await retirementFixture();
+  try {
+    await f.manager.appendTimelineItem(f.agent.id, {
+      type: "assistant_message",
+      text: "Finished work",
+    });
+    const before = await f.registry.get(f.agent.id);
+    expect(toAgentPayload(f.agent).runtimeLoaded).toBe(true);
+    const result = await f.manager.retireAgentRuntime(f.agent.id, f.expected);
+    expect(result).toMatchObject({
+      agentId: f.agent.id,
+      executionId: f.expected.executionId,
+      alreadyClosed: false,
+      physicalCloseProven: true,
+    });
+    expect(f.closes).toBe(1);
+    expect(f.manager.getAgent(f.agent.id)).toBeNull();
+    const closed = await f.registry.get(f.agent.id);
+    expect(closed).toMatchObject({
+      lastStatus: "closed",
+      labels: before!.labels,
+      persistence: before!.persistence,
+    });
+    expect(
+      await f.executionStore.get(f.agent.id, {
+        kind: "execution",
+        executionId: f.execution.executionId,
+      }),
+    ).toEqual(f.execution);
+    expect(await f.manager.retireAgentRuntime(f.agent.id, f.expected)).toMatchObject({
+      alreadyClosed: true,
+    });
+    expect(f.closes).toBe(1);
+    expect(closed?.archivedAt).toBeUndefined();
+    expect(buildStoredAgentPayload(closed!, ["codex"]).runtimeLoaded).toBe(false);
+    const reopened = await ensureUnarchivedAgentLoaded(f.agent.id, {
+      agentManager: f.manager,
+      agentStorage: f.registry,
+      logger,
+    });
+    expect(reopened.id).toBe(f.agent.id);
+    expect(await f.manager.getLastAssistantMessage(f.agent.id)).toBe("Finished work");
+    expect(await f.manager.getTimelineRows(f.agent.id)).toHaveLength(1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test.each(["unknown", "newer", "parent", "cwd", "active"])(
+  "runtime retirement refuses %s evidence",
+  async (kind) => {
+    const f = await retirementFixture();
+    try {
+      const expected = { ...f.expected };
+      if (kind === "unknown" || kind === "newer") {
+        await f.executionStore.create({
+          ...f.execution,
+          executionId: "later",
+          clientMessageId: "later",
+          startedAt: "2026-10-29T00:02:00.000Z",
+          status: kind === "unknown" ? "unknown" : "completed",
+        });
+        if (kind === "unknown")
+          Object.assign(expected, { executionId: "later", clientMessageId: "later" });
+      }
+      if (kind === "parent") expected.parentAgentId = "other";
+      if (kind === "cwd") expected.cwd = "/other";
+      if (kind === "active") f.manager.streamAgent(f.agent.id, "reserved newer turn");
+      await expect(f.manager.retireAgentRuntime(f.agent.id, expected)).rejects.toThrow(
+        /agent_runtime_retirement_/,
+      );
+      expect(f.closes).toBe(0);
+      expect(f.manager.getAgent(f.agent.id)).not.toBeNull();
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test("runtime retirement refuses new direct admission while provider close is pending", async () => {
+  const f = await retirementFixture();
+  const allowed = deferred<void>();
+  f.holdClose(allowed.promise);
+  try {
+    const closing = f.manager.retireAgentRuntime(f.agent.id, f.expected);
+    await f.closeStarted;
+    expect(() => f.manager.streamAgent(f.agent.id, "racing request")).toThrow(
+      "agent_runtime_retiring",
+    );
+    allowed.resolve();
+    await closing;
+  } finally {
+    allowed.resolve();
+    await f.cleanup();
+  }
+});
+
+test("runtime retirement keeps the writer on close failure", async () => {
+  const f = await retirementFixture();
+  f.failClose();
+  try {
+    await expect(f.manager.retireAgentRuntime(f.agent.id, f.expected)).rejects.toThrow(
+      "close failed",
+    );
+    expect(f.manager.getAgent(f.agent.id)).not.toBeNull();
+    expect((await f.registry.get(f.agent.id))?.lastStatus).toBe("idle");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("runtime retirement preserves active provider children and allows archived cold evidence", async () => {
+  const f = await retirementFixture();
+  try {
+    f.emit({
+      type: "provider_subagent",
+      provider: "codex",
+      event: { type: "upsert", id: "child", title: "Useful child", status: "running" },
+    });
+    await vi.waitFor(() => expect(f.manager.listProviderSubagents(f.agent.id)).toHaveLength(1));
+    await expect(f.manager.retireAgentRuntime(f.agent.id, f.expected)).rejects.toThrow(
+      "agent_runtime_retirement_busy",
+    );
+    expect(f.manager.getProviderSubagent(f.agent.id, "child")?.status).toBe("running");
+    expect(f.closes).toBe(0);
+    f.emit({
+      type: "provider_subagent",
+      provider: "codex",
+      event: { type: "upsert", id: "child", status: "completed" },
+    });
+    await vi.waitFor(() =>
+      expect(f.manager.getProviderSubagent(f.agent.id, "child")?.status).toBe("completed"),
+    );
+    await f.manager.archiveAgent(f.agent.id);
+    const archived = await f.registry.get(f.agent.id);
+    const result = await f.manager.retireAgentRuntime(f.agent.id, f.expected);
+    expect(result.alreadyClosed).toBe(true);
+    expect((await f.registry.get(f.agent.id))?.archivedAt).toBe(archived?.archivedAt);
+    expect(f.closes).toBe(1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("runtime retirement releases admission before a concurrent cold reopen", async () => {
+  const releaseStarted = deferred<void>();
+  const releaseAllowed = deferred<void>();
+  const f = await retirementFixture(async () => {
+    releaseStarted.resolve();
+    await releaseAllowed.promise;
+  });
+  try {
+    const closing = f.manager.retireAgentRuntime(f.agent.id, f.expected);
+    await releaseStarted.promise;
+    const reopened = ensureUnarchivedAgentLoaded(f.agent.id, {
+      agentManager: f.manager,
+      agentStorage: f.registry,
+      logger,
+    });
+    await Promise.resolve();
+    expect(f.client.resumeOverrides).toHaveLength(0);
+    releaseAllowed.resolve();
+    await closing;
+    expect((await reopened).id).toBe(f.agent.id);
+    expect(f.client.resumeOverrides).toHaveLength(1);
+  } finally {
+    releaseAllowed.resolve();
+    await f.cleanup();
+  }
+});
+
+test("runtime retirement retries admission release after a release failure without reopening", async () => {
+  let releases = 0;
+  const f = await retirementFixture(async () => {
+    if (++releases === 1) throw new Error("release unavailable");
+  });
+  try {
+    await expect(f.manager.retireAgentRuntime(f.agent.id, f.expected)).rejects.toThrow(
+      "release unavailable",
+    );
+    expect(f.manager.getAgent(f.agent.id)).toBeNull();
+    expect(f.closes).toBe(1);
+    await expect(f.manager.retireAgentRuntime(f.agent.id, f.expected)).resolves.toMatchObject({
+      alreadyClosed: true,
+    });
+    expect(releases).toBe(2);
+    expect(f.closes).toBe(1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("runtime retirement accepts an exact unkeyed continuation without inventing a submission", async () => {
+  const f = await retirementFixture();
+  try {
+    await f.executionStore.create({
+      ...f.execution,
+      executionId: "unkeyed",
+      clientMessageId: undefined,
+      startedAt: "2026-10-29T00:02:00.000Z",
+    });
+    const latest = await f.manager.getExecution(f.agent.id, { kind: "latest" });
+    expect(latest?.executionId).toBe("unkeyed");
+    expect(latest?.clientMessageId).toBeUndefined();
+    await expect(
+      f.manager.retireAgentRuntime(f.agent.id, {
+        ...f.expected,
+        executionId: "unkeyed",
+        clientMessageId: null,
+      }),
+    ).resolves.toMatchObject({ executionId: "unkeyed", alreadyClosed: false });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("runtime retirement never treats a restarted daemon cold snapshot as physical closure proof", async () => {
+  const f = await retirementFixture();
+  try {
+    await f.manager.closeAgent(f.agent.id);
+    const restarted = new AgentManager({
+      clients: { codex: f.client },
+      registry: f.registry,
+      executionStore: f.executionStore,
+      logger,
+    });
+    await expect(restarted.retireAgentRuntime(f.agent.id, f.expected)).resolves.toMatchObject({
+      alreadyClosed: true,
+      physicalCloseProven: false,
+    });
+    await expect(f.manager.retireAgentRuntime(f.agent.id, f.expected)).resolves.toMatchObject({
+      alreadyClosed: true,
+      physicalCloseProven: true,
+    });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("runtime retirement drains a pending provider start before checking the exact boundary", async () => {
+  const f = await retirementFixture();
+  try {
+    f.emit({ type: "turn_started", provider: "codex", turnId: "autonomous-new-turn" });
+    await expect(f.manager.retireAgentRuntime(f.agent.id, f.expected)).rejects.toThrow(
+      /agent_runtime_retirement_/,
+    );
+    expect(f.closes).toBe(0);
+  } finally {
+    await f.cleanup();
   }
 });

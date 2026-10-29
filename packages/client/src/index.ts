@@ -1,3 +1,7 @@
+import type {
+  AgentRuntimeRetireInput,
+  AgentRuntimeRetireResult,
+} from "@getpaseo/protocol/agent-execution";
 import type { AgentExecution, AgentExecutionQuery } from "@getpaseo/protocol/agent-execution";
 export type { AgentExecution, AgentExecutionQuery } from "@getpaseo/protocol/agent-execution";
 import type { OwnedSubscription } from "./connection/index.js";
@@ -373,6 +377,8 @@ export interface PaseoAgentHandle {
   refresh(requestId?: string): Promise<PaseoAgentRefetchResult | null>;
   /** Reads one exact execution; null means no record, not successful or cancelled work. */
   execution(query: AgentExecutionQuery): Promise<AgentExecution | null>;
+  /** Dispose only an exact settled runtime; retain history, parentage and queued work. */
+  retireRuntime(expected: AgentRuntimeRetireInput): Promise<AgentRuntimeRetireResult>;
   send(text: string, options?: PaseoAgentSendOptions): Promise<void>;
   respondToPermission(options: PaseoAgentRespondToPermissionOptions): Promise<void>;
   /** Sends a prompt and resolves when that turn finishes or needs attention. */
@@ -393,6 +399,8 @@ export interface PaseoAgentHandle {
 }
 
 export interface PaseoAgentActions {
+  /** False until connected to a host that supports conditional idle disposal. */
+  supportsRuntimeRetirement(): boolean;
   list(options: PaseoAgentListOptions & { subscribe: {} }): Promise<
     PaseoAgentListResult & {
       subscriptionId: string;
@@ -744,6 +752,8 @@ export function createPaseoApi(
       subscribe: listenWorkspaces,
     },
     agents: {
+      supportsRuntimeRetirement: () =>
+        daemonClient.getLastServerInfoMessage()?.features?.agentRuntimeRetirement === true,
       list: listAgents,
       ref: (agent) => createAgentHandle(agent),
       create: (options) => createAgent(options),
@@ -965,6 +975,7 @@ function createAgentHandleFactory(
         return result;
       },
       execution: (query) => daemonClient.getAgentExecution(id, query),
+      retireRuntime: (expected) => daemonClient.retireAgentRuntime(id, expected),
       send: async (text, options) => {
         await daemonClient.sendAgentMessage(id, text, options);
       },

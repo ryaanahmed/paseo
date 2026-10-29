@@ -1,3 +1,4 @@
+import { AgentRuntimeRetireInputSchema } from "@getpaseo/protocol/agent-execution";
 import type { AgentStreamEvent, AgentTimelineItem } from "../../agent/agent-sdk-types.js";
 import { z } from "zod";
 import { CreateAgentRequestMessageSchema } from "@getpaseo/protocol/messages";
@@ -26,10 +27,19 @@ export const lifecycleEventNames = [
   "workspace.created",
   "workspace.archived",
 ] as const;
-export const beforeHookNames = ["agent.create", "agent.session_open", "workspace.create"] as const;
+export const beforeHookNames = [
+  "agent.create",
+  "agent.session_open",
+  "agent.runtime_release",
+  "workspace.create",
+] as const;
 
 const beforeSchemas = {
   "agent.create": CreateAgentRequestMessageSchema.pick({ config: true, env: true }).strict(),
+  "agent.runtime_release": AgentRuntimeRetireInputSchema.extend({
+    agentId: z.string(),
+    physicalCloseProven: z.boolean(),
+  }).strict(),
   "agent.session_open": z
     .object({
       agentId: z.string(),
@@ -136,6 +146,12 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
   output: unknown,
 ): PluginBeforeRequests[Name] {
   const result = validateBeforeRequest(name, output);
+  if (
+    name === "agent.runtime_release" &&
+    JSON.stringify(validateBeforeRequest(name, input)) !== JSON.stringify(result)
+  ) {
+    throw new Error("agent.runtime_release hooks cannot change disposal identity");
+  }
   if (name === "agent.session_open") {
     const previous = beforeSchemas["agent.session_open"].parse(input);
     const next = beforeSchemas["agent.session_open"].parse(result);
