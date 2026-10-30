@@ -34,8 +34,12 @@ export interface AgentMessageQueuePorts {
   onState?(record: QueuedAgentMessage): void;
   recipient(agentId: string): Promise<"idle" | "busy" | "unavailable">;
   execution(agentId: string, clientMessageId: string): Promise<AgentExecution | null>;
+  // Preparation cannot submit a prompt. Its durable record remains pending even on restart.
+  prepare?(record: QueuedAgentMessage): Promise<"ready" | "admission_blocked">;
   // Admission must synchronously reserve the recipient after its last busy/archive check.
-  dispatch(record: QueuedAgentMessage): Promise<"started" | "busy" | "unavailable">;
+  dispatch(
+    record: QueuedAgentMessage,
+  ): Promise<"started" | "busy" | "unavailable" | "admission_blocked">;
 }
 
 /** Durable FIFO admission. Uncertain submissions block their recipient rather than replaying. */
@@ -182,7 +186,13 @@ export class AgentMessageQueue {
         );
         return;
       }
-      record = { ...record, state: "dispatching" };
+      if (this.ports.prepare && (await this.ports.prepare(record)) === "admission_blocked") {
+        await this.exclusive(() =>
+          this.save({ ...record, state: "pending", errorCode: "provider_admission_blocked" }),
+        );
+        return;
+      }
+      record = { ...record, state: "dispatching", errorCode: undefined };
       await this.exclusive(() => this.save(record));
       if (this.stopped) {
         await this.exclusive(() => this.save({ ...record, state: "pending" }));
@@ -194,8 +204,12 @@ export class AgentMessageQueue {
           await this.exclusive(() =>
             this.save({
               ...record,
-              state: admission === "busy" ? "pending" : "blocked",
-              errorCode: admission === "busy" ? "recipient_busy" : "recipient_unavailable",
+              state: admission === "unavailable" ? "blocked" : "pending",
+              errorCode: {
+                admission_blocked: "provider_admission_blocked",
+                busy: "recipient_busy",
+                unavailable: "recipient_unavailable",
+              }[admission],
             }),
           );
         }

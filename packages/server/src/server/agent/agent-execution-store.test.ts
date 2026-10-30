@@ -112,3 +112,18 @@ test("latest execution refuses timestamp ties rather than choosing a replay pred
     status: "unknown",
   });
 });
+
+test("external admission reads the same durable terminal evidence through the store path", async () => {
+  const { directory, store } = await fixture();
+  await store.create(record("finishing-proof", { status: "running", turnId: "native-turn" }));
+  expect(store.directoryPath).toBe(directory);
+  const file = store.pathForExecution("worker", "finishing-proof");
+  expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({
+    agentId: "worker",
+    executionId: "finishing-proof",
+    status: "running",
+    turnId: "native-turn",
+  });
+  await store.update("worker", "finishing-proof", { status: "completed" });
+  expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({ status: "completed" });
+});
