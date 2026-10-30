@@ -129,6 +129,35 @@ Daemon bootstrap reconciles that ledger in the background, without blocking star
 
 ---
 
+## Host admission for provider runtimes
+
+Hosts that require admission configure `PASEO_PROVIDER_ADMISSION=required`, an absolute
+`PASEO_PROVIDER_ADMISSION_HELPER`, and a positive byte allowance in
+`PASEO_PROVIDER_ADMISSION_BYTES`. The registration path, consumer epoch, and manifest digest
+come from `PASEO_PROVIDER_ADMISSION_REGISTRATION`, `PASEO_PROVIDER_ADMISSION_EPOCH`, and
+`PASEO_PROVIDER_ADMISSION_MANIFEST`. They belong to attended host configuration; a plugin
+cannot substitute an optional lifecycle hook for this gate.
+
+The daemon owns the helper registration child. Missing configuration, a missing registration,
+or a dead owner closes new launches while status and physical cleanup remain available. The
+helper owns the complete process scope and releases its allowance only after that scope
+settles. Agent IDs and turn completion do not identify physical runtime lifetime. ACP terminal
+siblings join the parent's admitted scope; internal provider children inherit it.
+
+A new logical worker also needs an admission permit, including a new session on an existing
+OpenCode server. Existing warm turns reuse their physical runtime. Native queued messages
+remain durably pending while cold-runtime admission is blocked; preparation cannot submit a
+prompt. New providers must cover their utility, discovery, import, history and archive launches,
+not only session creation. Plugin providers currently lack this custody integration and are
+refused in required mode; enabling one requires additional coverage before host readiness.
+
+Only an exact native execution bound to its physical runtime can enroll finishing tests.
+The owner registration binds the daemon's native execution directory. Eligibility reads that
+execution's current durable status, so a failed end notification cannot keep a completed turn
+eligible on a warm runtime. Failure to register the binding denies finishing-test eligibility
+without rewriting an already accepted execution. The host's finite finishing-test declaration
+remains a separate admission policy.
+
 ## Provider Snapshot Refresh Contract
 
 Provider snapshots are views of the catalogues needed for a target. Before looking up cached
