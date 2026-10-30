@@ -758,6 +758,45 @@ describe("ClaudeAgentSession features", () => {
     return { queryFactory, queryMock, launches };
   }
 
+  test("concurrent cold preparation owns one physical query", async () => {
+    const { queryFactory, launches } = createQueryMock();
+    let resolveBinary!: (binary: string) => void;
+    const binary = new Promise<string>((resolve) => {
+      resolveBinary = resolve;
+    });
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: () => binary,
+    }).createSession({ provider: "claude", cwd: process.cwd(), modeId: "default" });
+    if (!session.prepareRuntime) throw new Error("Missing physical runtime preparation");
+    const first = session.prepareRuntime();
+    const second = session.prepareRuntime();
+    resolveBinary("/test/claude/bin");
+    await Promise.all([first, second]);
+    expect(launches).toHaveLength(1);
+    await session.close();
+  });
+
+  test("closing during cold preparation prevents a late physical query", async () => {
+    const { queryFactory, launches } = createQueryMock();
+    let resolveBinary!: (binary: string) => void;
+    const binary = new Promise<string>((resolve) => {
+      resolveBinary = resolve;
+    });
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: () => binary,
+    }).createSession({ provider: "claude", cwd: process.cwd(), modeId: "default" });
+    if (!session.prepareRuntime) throw new Error("Missing physical runtime preparation");
+    const opening = session.prepareRuntime();
+    await session.close();
+    resolveBinary("/test/claude/bin");
+    await expect(opening).rejects.toThrow("Claude session closed");
+    expect(launches).toEqual([]);
+  });
+
   test("publishes a resolution when the SDK aborts a permission callback", async () => {
     const { queryFactory } = createQueryMock();
     const session = await new ClaudeAgentClient({

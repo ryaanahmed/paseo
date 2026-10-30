@@ -380,6 +380,14 @@ export class OpenCodeV2Session implements AgentSession {
         item.type === "assistant_message" ? current + item.text : current,
     });
   }
+  getPhysicalRuntimeId(): string | null {
+    return this.exited || this.closed ? null : (this.connection.runtimeId ?? null);
+  }
+
+  async prepareRuntime(): Promise<void> {
+    await this.reconnectIfExited();
+  }
+
   async startTurn(prompt: AgentPromptInput, options?: AgentRunOptions) {
     await this.reconnectIfExited();
     return this.turns.startTurn(prompt, options);

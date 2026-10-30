@@ -107,7 +107,7 @@ describe("Claude SDK direct behavior", () => {
     const claudeBinary = await findExecutable("claude");
 
     // Use same options as the Claude provider
-    const q = claudeQuery(
+    const q = await claudeQuery(
       {
         prompt: input,
         options: {

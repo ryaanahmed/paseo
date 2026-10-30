@@ -7,7 +7,7 @@ import {
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
 import { buildSelfNodeCommand } from "../../../paseo-env.js";
-import { spawnProcess } from "../../../../utils/spawn.js";
+import { prepareProviderLaunch, type ProviderLaunch } from "../../provider-admission.js";
 
 // Keep the raw SDK query import in this module only. Claude process launch behavior
 // must stay shared between production and tests so Windows .cmd/.bat handling cannot
@@ -57,6 +57,7 @@ function resolveClaudeSpawnCommand(
 function applyRuntimeSettingsToClaudeOptions(
   options: ClaudeOptions,
   context: ClaudeQueryContext,
+  ticket: ProviderLaunch,
 ): ClaudeOptions {
   const { runtimeSettings, launchEnv, onChildProcess } = context;
   return {
@@ -84,7 +85,7 @@ function applyRuntimeSettingsToClaudeOptions(
         : null;
       const command = selfNodeCommand?.command ?? resolved.command;
       const args = selfNodeCommand?.args ?? resolved.args;
-      const child = spawnProcess(command, args, {
+      const child = ticket.spawn(command, args, {
         cwd: spawnOptions.cwd,
         ...(selfNodeCommand
           ? { env: selfNodeCommand.env, envMode: "internal" as const }
@@ -110,10 +111,20 @@ function applyRuntimeSettingsToClaudeOptions(
   };
 }
 
-export function claudeQuery(input: ClaudeQueryInput, context: ClaudeQueryContext = {}): Query {
+export async function claudeQuery(
+  input: ClaudeQueryInput,
+  context: ClaudeQueryContext = {},
+): Promise<Query> {
+  const ticket = await prepareProviderLaunch();
   const launchQuery = context.queryFactory ?? query;
-  return launchQuery({
-    ...input,
-    options: applyRuntimeSettingsToClaudeOptions(input.options, context),
-  });
+  try {
+    input.options.abortController?.signal.throwIfAborted();
+    return launchQuery({
+      ...input,
+      options: applyRuntimeSettingsToClaudeOptions(input.options, context, ticket),
+    });
+  } catch (error) {
+    await ticket.cancelUnused();
+    throw error;
+  }
 }

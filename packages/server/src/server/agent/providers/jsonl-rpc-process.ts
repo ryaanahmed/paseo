@@ -2,6 +2,12 @@ import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:chi
 import type { Logger } from "pino";
 
 import { spawnProcess } from "../../../utils/spawn.js";
+import {
+  prepareProviderLaunch,
+  getProviderRuntimeId,
+  providerAdmissionConfig,
+  ProviderAdmissionBlocked,
+} from "../provider-admission.js";
 import { terminateWithTreeKill } from "../../../utils/tree-kill.js";
 import { JsonlFrameDecoder } from "./jsonl-frame-decoder.js";
 export { supportsJsonlRpcProtocolV2 } from "./jsonl-frame-decoder.js";
@@ -63,6 +69,8 @@ function assertChildWithPipes(
 }
 
 function spawnJsonlRpcProcess(launch: JsonlRpcLaunch): ChildProcessWithoutNullStreams {
+  if (providerAdmissionConfig())
+    throw new ProviderAdmissionBlocked("JSONL runtime must use admitted factory");
   const child = spawnProcess(launch.command, launch.args, {
     cwd: launch.cwd,
     envOverlay: launch.env,
@@ -72,7 +80,34 @@ function spawnJsonlRpcProcess(launch: JsonlRpcLaunch): ChildProcessWithoutNullSt
   return child;
 }
 
+export function createJsonlRpcProcess(
+  options: JsonlRpcProcessOptions,
+): JsonlRpcProcess | Promise<JsonlRpcProcess> {
+  const config = providerAdmissionConfig();
+  if (!config) return new JsonlRpcProcess(options);
+  if (options.spawn)
+    throw new ProviderAdmissionBlocked("custom JSONL launcher lacks required custody coverage");
+  return prepareProviderLaunch(config).then(
+    (ticket) =>
+      new JsonlRpcProcess({
+        ...options,
+        spawn: (launch) => {
+          const child = ticket.spawn(launch.command, launch.args, {
+            cwd: launch.cwd,
+            envOverlay: launch.env,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+          assertChildWithPipes(child);
+          return child;
+        },
+      }),
+  );
+}
+
 export class JsonlRpcProcess {
+  getPhysicalRuntimeId(): string | null {
+    return getProviderRuntimeId(this.child);
+  }
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly diagnosticName: string;
   private readonly pending = new Map<string, PendingRequest>();

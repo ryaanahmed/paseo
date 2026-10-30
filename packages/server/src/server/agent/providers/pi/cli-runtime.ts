@@ -6,6 +6,7 @@ import type { ProviderRuntimeSettings } from "../../provider-launch-config.js";
 import {
   JSONL_RPC_NO_TIMEOUT,
   JsonlRpcProcess,
+  createJsonlRpcProcess,
   type JsonlRpcLaunch,
 } from "../jsonl-rpc-process.js";
 import {
@@ -73,7 +74,8 @@ export class PiCliRuntime implements PiRuntime {
       defaultRequestTimeoutMs: this.options.requestTimeoutMs,
       ...(spawn ? { spawn: () => spawn(launch) } : {}),
     };
-    const process = new JsonlRpcProcess(processOptions);
+    const starting = createJsonlRpcProcess(processOptions);
+    const process = starting instanceof Promise ? await starting : starting;
     if (input.signal?.aborted) {
       await process.close(input.signal.reason);
       input.signal.throwIfAborted();
@@ -83,6 +85,9 @@ export class PiCliRuntime implements PiRuntime {
 }
 
 class PiCliRuntimeSession implements PiRuntimeSession {
+  getPhysicalRuntimeId(): string | null {
+    return this.process.getPhysicalRuntimeId();
+  }
   private readonly subscribers = new Set<(event: PiRuntimeEvent) => void>();
 
   constructor(

@@ -676,6 +676,9 @@ export interface AgentUsageSession {
 }
 
 export interface AgentSession {
+  /** Establish a physical runtime before durable queue submission; warm reuse does not re-admit. */
+  prepareRuntime?(): Promise<void>;
+  getPhysicalRuntimeId?(): string | null;
   usageSession?(): AgentUsageSession | null;
   readonly provider: AgentProvider;
   readonly id: string | null;

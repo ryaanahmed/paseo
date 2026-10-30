@@ -73,7 +73,7 @@ import {
   probeExecutable,
 } from "../../../executable-resolution/executable-resolution.js";
 import { createPathEquivalenceMatcher } from "../../../utils/path.js";
-import { spawnProcess } from "../../../utils/spawn.js";
+import { spawnProviderProcess } from "../provider-admission.js";
 import { extractCodexTerminalSessionId, nonEmptyString } from "./tool-call-mapper-utils.js";
 import {
   buildCodexFeatures,
@@ -3581,6 +3581,14 @@ export class CodexAppServerAgentSession implements AgentSession {
       planModeEnabled: this.planModeEnabled,
       planModeAvailable: this.hasPlanCollaborationMode(),
     });
+  }
+
+  getPhysicalRuntimeId(): string | null {
+    return this.client?.getPhysicalRuntimeId() ?? null;
+  }
+
+  async prepareRuntime(): Promise<void> {
+    await this.connect();
   }
 
   async connect(): Promise<void> {
@@ -7241,7 +7249,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       },
       "provider.codex.spawn",
     );
-    const child = spawnProcess(launchPrefix.command, args, {
+    const child = await spawnProviderProcess(launchPrefix.command, args, {
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
       baseEnv: options?.environment ?? buildCodexAppServerEnv(this.runtimeSettings, launchEnv),

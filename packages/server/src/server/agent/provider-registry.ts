@@ -1,3 +1,4 @@
+import { providerAdmissionConfig, ProviderAdmissionBlocked } from "./provider-admission.js";
 import type { Logger } from "pino";
 import type { ProviderOptions, ToolPolicy } from "@getpaseo/protocol/agent-types";
 
@@ -451,6 +452,8 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     },
     usageSession: inner.usageSession?.bind(inner),
     run: (prompt, options) => inner.run(prompt, options),
+    prepareRuntime: inner.prepareRuntime?.bind(inner),
+    getPhysicalRuntimeId: inner.getPhysicalRuntimeId?.bind(inner),
     startTurn: (prompt, options) => inner.startTurn(prompt, options),
     steerActiveTurn: inner.steerActiveTurn?.bind(inner),
     subscribe: (callback) => inner.subscribe((event) => callback(mapStreamEvent(provider, event))),
@@ -935,7 +938,14 @@ export function buildProviderRegistry(
         definition,
         override,
         runtimeSettings: runtimeSettings?.[provider],
-        createClient: definition.createClient,
+        createClient: (providerLogger, settings) => {
+          if (providerAdmissionConfig()) {
+            throw new ProviderAdmissionBlocked(
+              `plugin provider ${provider} has no physical launch coverage`,
+            );
+          }
+          return definition.createClient(providerLogger, settings);
+        },
         contract: {
           supportsExactMcpPreapproval: definition.supportsExactMcpPreapproval,
         },

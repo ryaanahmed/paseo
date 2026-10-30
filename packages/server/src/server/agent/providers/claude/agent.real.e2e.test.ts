@@ -236,7 +236,7 @@ describe("ClaudeAgentSession integration", () => {
   test("supportedModels returns the current abstract Claude SDK model shape", async () => {
     const claudeBinary = await findExecutable("claude");
     if (!claudeBinary) throw new Error("claude binary required for this integration test");
-    const query = claudeQuery(
+    const query = await claudeQuery(
       {
         prompt: createEmptyPrompt(),
         options: {

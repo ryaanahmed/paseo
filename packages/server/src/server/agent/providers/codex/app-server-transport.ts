@@ -1,3 +1,4 @@
+import { getProviderRuntimeId } from "../../provider-admission.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import type { Logger } from "pino";
@@ -168,6 +169,9 @@ function readProviderTurnId(params: unknown): string | undefined {
 }
 
 export class CodexAppServerClient {
+  getPhysicalRuntimeId(): string | null {
+    return getProviderRuntimeId(this.child);
+  }
   private readonly rl: readline.Interface;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly requestHandlers = new Map<string, RequestHandler>();
