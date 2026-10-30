@@ -20,6 +20,14 @@ export class AgentExecutionStore {
 
   constructor(private readonly directory: string) {}
 
+  get directoryPath(): string {
+    return path.resolve(this.directory);
+  }
+
+  pathForExecution(agentId: string, executionId: string): string {
+    return path.join(this.directoryPath, `${key(agentId, executionId)}.json`);
+  }
+
   initialize(): Promise<void> {
     this.initialized ??= this.load();
     return this.initialized;
@@ -122,10 +130,7 @@ export class AgentExecutionStore {
   }
 
   private write(record: AgentExecution): Promise<void> {
-    return writeJsonFileAtomic(
-      path.join(this.directory, `${key(record.agentId, record.executionId)}.json`),
-      record,
-    );
+    return writeJsonFileAtomic(this.pathForExecution(record.agentId, record.executionId), record);
   }
 }
 

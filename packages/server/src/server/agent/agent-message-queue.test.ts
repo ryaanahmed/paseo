@@ -255,3 +255,34 @@ test("deduplication ignores object property order and undefined after restart", 
   await queue.reconcile();
   expect(dispatched).toEqual(["one"]);
 });
+
+test("host admission keeps unsent messages durable through restart and resumes once", async () => {
+  ports.prepare = async () => "admission_blocked";
+  await enqueue("host-held");
+  await queue.reconcile();
+  expect(dispatched).toEqual([]);
+  expect(executions.size).toBe(0);
+  expect(await queue.get("recipient", "host-held")).toMatchObject({
+    state: "pending",
+    errorCode: "provider_admission_blocked",
+  });
+  queue.stop();
+  await queue.flush();
+  queue = new AgentMessageQueue(directory, ports);
+  await queue.reconcile();
+  expect(dispatched).toEqual([]);
+  ports.prepare = async () => "ready";
+  await queue.reconcile();
+  await queue.reconcile();
+  expect(dispatched).toEqual(["host-held"]);
+});
+
+test("interrupted runtime preparation cannot mark an unsent prompt uncertain", async () => {
+  ports.prepare = async () => {
+    throw new Error("owner unavailable before provider send");
+  };
+  await enqueue("not-submitted");
+  await expect(queue.reconcile()).rejects.toThrow("owner unavailable");
+  expect((await queue.get("recipient", "not-submitted"))?.state).toBe("pending");
+  expect(dispatched).toEqual([]);
+});

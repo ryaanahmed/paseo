@@ -99,3 +99,18 @@ test("durable records exclude prompt and error prose", async () => {
   const content = await readFile(path.join(directory, files[0]!), "utf8");
   expect(content).not.toContain("private");
 });
+
+test("external admission reads the same durable terminal evidence through the store path", async () => {
+  const { directory, store } = await fixture();
+  await store.create(record("finishing-proof", { status: "running", turnId: "native-turn" }));
+  expect(store.directoryPath).toBe(directory);
+  const file = store.pathForExecution("worker", "finishing-proof");
+  expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({
+    agentId: "worker",
+    executionId: "finishing-proof",
+    status: "running",
+    turnId: "native-turn",
+  });
+  await store.update("worker", "finishing-proof", { status: "completed" });
+  expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({ status: "completed" });
+});

@@ -1,3 +1,9 @@
+import {
+  ProviderAdmissionBlocked,
+  providerAdmissionConfig,
+  permitNewProviderWorker,
+  recordProviderExecution,
+} from "./provider-admission.js";
 import { GobstopperContextManager, stripGobstopperScope } from "./gobstopper-context.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
@@ -771,7 +777,12 @@ export class AgentManager {
   private messageQueueTimer?: ReturnType<typeof setInterval>;
   private readonly activeExecutions = new Map<
     string,
-    { executionId: string; turnId: string | null; session: AgentSession }
+    {
+      executionId: string;
+      turnId: string | null;
+      session: AgentSession;
+      physicalRuntimeId?: string | null;
+    }
   >();
   private readonly subscribers = new Set<SubscriptionRecord>();
   private readonly idFactory: () => string;
@@ -846,6 +857,7 @@ export class AgentManager {
       recipient: (agentId) => this.queuedMessageRecipient(agentId),
       execution: (agentId, clientMessageId) =>
         this.getExecution(agentId, { kind: "submission", clientMessageId }),
+      prepare: (message) => this.prepareQueuedMessage(message),
       dispatch: (message) => this.dispatchQueuedMessage(message),
       onState: (message) => {
         if (message.state === "unknown" || message.state === "blocked") {
@@ -909,12 +921,36 @@ export class AgentManager {
       : "idle";
   }
 
+  private async prepareQueuedMessage(
+    message: QueuedAgentMessage,
+  ): Promise<"ready" | "admission_blocked"> {
+    try {
+      await ensureUnarchivedAgentLoaded(message.agentId, {
+        agentManager: this,
+        agentStorage: this.registry!,
+        logger: this.logger,
+      });
+      await this.runLifecycleMutation(message.agentId, async () => {
+        const agent = this.requireSessionAgent(message.agentId);
+        if (agent.session.prepareRuntime) await agent.session.prepareRuntime();
+        else if (providerAdmissionConfig()) {
+          throw new ProviderAdmissionBlocked("provider runtime preparation is not covered");
+        }
+      });
+      return "ready";
+    } catch (error) {
+      if (error instanceof ProviderAdmissionBlocked) return "admission_blocked";
+      throw error;
+    }
+  }
+
   private async dispatchQueuedMessage(
     message: QueuedAgentMessage,
-  ): Promise<"started" | "busy" | "unavailable"> {
+  ): Promise<"started" | "busy" | "unavailable" | "admission_blocked"> {
     try {
       return await this.dispatchQueuedMessageInner(message);
     } catch (error) {
+      if (error instanceof ProviderAdmissionBlocked) return "admission_blocked";
       await this.notifyQueuedMessageStartupFailure(message, error);
       throw error;
     }
@@ -968,7 +1004,7 @@ export class AgentManager {
 
   private async dispatchQueuedMessageInner(
     message: QueuedAgentMessage,
-  ): Promise<"started" | "busy" | "unavailable"> {
+  ): Promise<"started" | "busy" | "unavailable" | "admission_blocked"> {
     if (!this.acceptingAgentRegistrations) return "busy";
     if ((await this.queuedMessageRecipient(message.agentId)) === "unavailable")
       return "unavailable";
@@ -1524,6 +1560,7 @@ export class AgentManager {
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
+    await permitNewProviderWorker(resolvedAgentId);
     if (this.pluginLifecycle && !config.internal) {
       const request = await this.pluginLifecycle.before("agent.create", {
         config,
@@ -1649,6 +1686,7 @@ export class AgentManager {
     // settled before the config is prepared, because a history load reads an archived
     // agent whose working directory may be gone.
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
+    if (!record) await permitNewProviderWorker(resolvedAgentId);
     // Durable launch metadata cannot be changed by resume overrides.
     if (record) mergedConfig.role = record.config?.role;
     if (record?.config?.contextPolicy) {
@@ -1719,6 +1757,7 @@ export class AgentManager {
   }): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(this.idFactory(), "importProviderSession");
+    await permitNewProviderWorker(resolvedAgentId);
     this.requireEnabledProvider(input.provider);
 
     const client = await this.requireAvailableClient({ provider: input.provider });
@@ -2842,6 +2881,31 @@ export class AgentManager {
     return executionStore;
   }
 
+  private async registerExecutionRuntime(
+    agent: ActiveManagedAgent,
+    executionId: string,
+    turnId: string,
+  ): Promise<void> {
+    const execution = this.activeExecutions.get(agent.id);
+    if (execution?.executionId !== executionId) return;
+    execution.turnId = turnId;
+    execution.physicalRuntimeId = agent.session.getPhysicalRuntimeId?.() ?? null;
+    if (!execution.physicalRuntimeId) return;
+    try {
+      await recordProviderExecution(
+        "execution-start",
+        agent.id,
+        executionId,
+        execution.physicalRuntimeId,
+      );
+    } catch (error) {
+      this.logger.error(
+        { err: error, executionId },
+        "Finishing-test eligibility was not registered",
+      );
+    }
+  }
+
   private async startPendingForegroundTurn(params: {
     agent: ActiveManagedAgent;
     agentId: string;
@@ -2871,8 +2935,7 @@ export class AgentManager {
           turnId: result.turnId,
           ...(providerSessionId ? { providerSessionId } : {}),
         });
-        const execution = this.activeExecutions.get(agentId);
-        if (execution?.executionId === pendingRun.token) execution.turnId = result.turnId;
+        await this.registerExecutionRuntime(agent, pendingRun.token, result.turnId);
       }
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
@@ -4727,6 +4790,19 @@ export class AgentManager {
         status: "failed",
         errorCode,
       });
+    }
+    if (execution.physicalRuntimeId) {
+      await recordProviderExecution(
+        "execution-end",
+        agent.id,
+        execution.executionId,
+        execution.physicalRuntimeId,
+      ).catch((error) =>
+        this.logger.error(
+          { err: error, executionId: execution.executionId },
+          "Finishing-test eligibility needs reconciliation",
+        ),
+      );
     }
     this.forgetExecution(agent.id, execution.executionId);
   }
