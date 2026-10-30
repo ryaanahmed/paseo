@@ -1,3 +1,5 @@
+import { admissionOwnerConfig, providerAdmissionOwner } from "./agent/provider-admission-owner.js";
+import { providerAdmissionConfig } from "./agent/provider-admission.js";
 import { GobstopperContextManager } from "./agent/gobstopper-context.js";
 import { AgentExecutionStore } from "./agent/agent-execution-store.js";
 import type { PluginRegistries } from "@getpaseo/protocol/plugin-registry";
@@ -5,7 +7,7 @@ import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
 import { createServer as createHTTPServer, type IncomingMessage, type ServerResponse } from "http";
 import { constants, existsSync, unlinkSync } from "fs";
-import { open, rm, stat } from "fs/promises";
+import { open, rm, stat, mkdir } from "fs/promises";
 import { randomUUID } from "node:crypto";
 import { getHostName } from "./host-name.js";
 import path from "node:path";
@@ -580,6 +582,23 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
   return initialConfig;
 }
 
+async function startProviderAdmission(logger: Logger, executionRoot: string): Promise<void> {
+  // Register custody before any provider discovery can open a runtime. Failed
+  // coverage closes new launches while the daemon keeps cleanup/status available.
+  try {
+    const admission = providerAdmissionConfig();
+    if (admission) {
+      await mkdir(executionRoot, { recursive: true, mode: 0o700 });
+      await providerAdmissionOwner.start(admissionOwnerConfig(admission, executionRoot));
+    }
+  } catch (error) {
+    logger.error(
+      { err: error },
+      "Provider launches remain blocked: required admission owner unavailable",
+    );
+  }
+}
+
 export async function createPaseoDaemon(
   config: PaseoDaemonConfig,
   rootLogger: Logger,
@@ -587,6 +606,10 @@ export async function createPaseoDaemon(
 ): Promise<PaseoDaemon> {
   configureGitProcessPolicy(config.git ?? resolveGitProcessPolicy({ env: process.env }));
   const logger = rootLogger.child({ module: "bootstrap" });
+  await startProviderAdmission(
+    logger,
+    path.resolve(config.paseoHome, "runtime", "agent-executions"),
+  );
   const obsoleteTimelineDirectory = path.join(config.paseoHome, "agent-timelines");
   await rm(obsoleteTimelineDirectory, { recursive: true, force: true }).catch((error) => {
     logger.warn(
@@ -1808,6 +1831,7 @@ export async function createPaseoDaemon(
       scriptHealthMonitor.start();
       await agentManager.startAgentMessageQueue();
     } catch (error) {
+      providerAdmissionOwner.stop();
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
       unsubscribePluginProviders();
@@ -1823,6 +1847,7 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    providerAdmissionOwner.stop();
     localCredential = null;
     await deleteLocalCredential(config.paseoHome);
     // Stop tracking plugin provider registrations before anything tears plugins

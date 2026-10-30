@@ -16,7 +16,7 @@ import {
   resolveProviderLaunch,
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
-import { execCommand } from "../../../../utils/spawn.js";
+import { execProviderCommand } from "../../provider-admission.js";
 import { OpenCodeAgentClient } from "../opencode-agent.js";
 import type { OpenCodeV2AgentClient } from "./v2/agent.js";
 import { withOpenCodeRuntimeNotice } from "./runtime-notice.js";
@@ -75,7 +75,7 @@ export class OpenCodeRuntimeClient implements AgentClient {
           commandConfig: this.settings?.command,
           defaultBinary: "opencode",
         });
-        const result = await execCommand(launch.command, [...launch.args, "--version"], {
+        const result = await execProviderCommand(launch.command, [...launch.args, "--version"], {
           ...createProviderEnvSpec({ runtimeSettings: this.settings }),
           timeout: 5_000,
         });

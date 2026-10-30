@@ -8,7 +8,7 @@ import {
   type ProviderRuntimeSettings,
   type ResolvedProviderLaunch,
 } from "../provider-launch-config.js";
-import { execCommand } from "../../../utils/spawn.js";
+import { execProviderCommand } from "../provider-admission.js";
 
 export interface DiagnosticEntry {
   label: string;
@@ -140,7 +140,7 @@ export async function resolveBinaryVersion(
   signal?: AbortSignal,
 ): Promise<string> {
   try {
-    const { stdout } = await execCommand(binaryPath, ["--version"], {
+    const { stdout } = await execProviderCommand(binaryPath, ["--version"], {
       ...createProviderEnvSpec(),
       timeout: 5_000,
       signal,
@@ -289,7 +289,7 @@ function formatCommandProbeError(error: unknown): string {
 
 async function runCommandProbe(command: string, args: string[]): Promise<string> {
   try {
-    const { stdout, stderr } = await execCommand(command, args, {
+    const { stdout, stderr } = await execProviderCommand(command, args, {
       timeout: COMMAND_PROBE_TIMEOUT_MS,
       killSignal: "SIGKILL",
       maxBuffer: COMMAND_PROBE_MAX_BUFFER,
@@ -390,7 +390,7 @@ export async function buildCommandResolutionDiagnosticRows(
 
 async function resolveCommandVersion(invocation: BinaryDiagnosticVersionCommand): Promise<string> {
   try {
-    const { stdout, stderr } = await execCommand(invocation.command, invocation.args, {
+    const { stdout, stderr } = await execProviderCommand(invocation.command, invocation.args, {
       ...createProviderEnvSpec({ runtimeSettings: { env: invocation.env } }),
       timeout: 5_000,
     });

@@ -850,6 +850,15 @@ export class OmpAgentSession implements AgentSession {
     });
   }
 
+  getPhysicalRuntimeId(): string | null {
+    return this.runtimeSession.getPhysicalRuntimeId?.() ?? null;
+  }
+
+  async prepareRuntime(): Promise<void> {
+    if (this.runtimeDead) await this.replaceRuntime(this.currentModeId ?? "full");
+    if (this.closed) throw new Error("OMP session is closed");
+  }
+
   async startTurn(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<StartTurnResult> {
     if (this.activeTurnId) {
       throw new Error("An OMP turn is already active");

@@ -40,6 +40,7 @@ export interface PiStartSessionInput {
 }
 
 export interface PiRuntimeSession {
+  getPhysicalRuntimeId?(): string | null;
   readonly environment: Record<string, string>;
   onEvent(callback: (event: PiRuntimeEvent) => void): () => void;
   prompt(

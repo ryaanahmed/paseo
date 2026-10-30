@@ -7,7 +7,8 @@ import path from "node:path";
 import type { Logger } from "pino";
 
 import { findExecutable } from "../../../../executable-resolution/executable-resolution.js";
-import { spawnProcess, type SpawnProcessOptions } from "../../../../utils/spawn.js";
+import { type SpawnProcessOptions } from "../../../../utils/spawn.js";
+import { spawnProviderProcess, getProviderRuntimeId } from "../../provider-admission.js";
 import { terminateWithTreeKill, type ProcessTerminator } from "../../../../utils/tree-kill.js";
 import type { ManagedProcessRegistry } from "../../../managed-processes/managed-processes.js";
 import {
@@ -30,6 +31,7 @@ const OPENCODE_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 5_000;
 const OPENCODE_SERVER_FORCE_SHUTDOWN_TIMEOUT_MS = 1_000;
 
 export interface OpenCodeServerAcquisition {
+  runtimeId?: string | null;
   environment: Record<string, string>;
   server: { port: number; url: string };
   events: OpenCodeEventSource;
@@ -63,7 +65,7 @@ export type OpenCodeServerProcessSpawner = (
   command: string,
   args: string[],
   options: SpawnProcessOptions,
-) => ChildProcess;
+) => ChildProcess | Promise<ChildProcess>;
 
 export interface OpenCodeServerManagerOptions {
   logger: Logger;
@@ -111,7 +113,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       options.resolveCommandPrefix ??
       (() => resolveProviderCommandPrefix(this.runtimeSettings?.command, resolveOpenCodeBinary));
     this.resolveHomeDir = options.resolveHomeDir ?? resolveOpenCodeHomeDir;
-    this.spawnServerProcess = options.spawnServerProcess ?? spawnProcess;
+    this.spawnServerProcess = options.spawnServerProcess ?? spawnProviderProcess;
     this.createEventSource =
       options.createEventSource ?? ((input) => new OpenCodeEventConsumer(input));
     this.decorateServerEnv = options.decorateServerEnv;
@@ -211,6 +213,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     server.refCount += 1;
     let releasePromise: Promise<void> | null = null;
     return {
+      runtimeId: getProviderRuntimeId(server.process),
       server: { port: server.port, url: server.url },
       events: server.events,
       environment: server.environment,
@@ -340,7 +343,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       runtimeSettings: this.runtimeSettings,
       overlays: [launchEnv, bridgeEnv],
     });
-    const serverProcess = this.spawnServerProcess(launchPrefix.command, serverArgs, {
+    const serverProcess = await this.spawnServerProcess(launchPrefix.command, serverArgs, {
       cwd: serverCwd,
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],

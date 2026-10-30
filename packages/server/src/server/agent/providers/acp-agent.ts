@@ -1,3 +1,4 @@
+import { getProviderRuntimeId } from "../provider-admission.js";
 import { ACPProviderOptionsSchema } from "./acp-options.js";
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -122,7 +123,7 @@ import {
   buildStringCommandShellInvocation,
   createStringCommandShellEnvOverlay,
 } from "../../../utils/string-command-shell.js";
-import { spawnProcess } from "../../../utils/spawn.js";
+import { spawnProviderProcess, spawnProviderChild } from "../provider-admission.js";
 import {
   type DiagnosticEntry,
   toDiagnosticErrorMessage,
@@ -1400,7 +1401,7 @@ export class ACPAgentClient implements AgentClient {
     client: ACPClient = this.buildProbeClient(),
   ): Promise<ACPProcessTransport> {
     const { command, args } = await this.resolveLaunchCommand();
-    const child = spawnProcess(command, args, {
+    const child = await spawnProviderProcess(command, args, {
       cwd: process.cwd(),
       ...createProviderEnvSpec({
         runtimeSettings: this.runtimeSettings,
@@ -1899,6 +1900,16 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
 
     return result;
+  }
+
+  getPhysicalRuntimeId(): string | null {
+    return getProviderRuntimeId(this.child);
+  }
+
+  async prepareRuntime(): Promise<void> {
+    if (this.closed || !this.connection || !this.sessionId) {
+      throw new Error(`${this.provider} session is not initialized`);
+    }
   }
 
   async startTurn(
@@ -2722,7 +2733,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       terminalCommand.shell === false
         ? [this.launchEnv, env, createStringCommandShellEnvOverlay()]
         : [this.launchEnv, env];
-    const child = spawnProcess(terminalCommand.command, terminalCommand.args, {
+    const child = spawnProviderChild(this.child, terminalCommand.command, terminalCommand.args, {
       cwd: params.cwd ?? this.config.cwd,
       ...createProviderEnvSpec({
         runtimeSettings: this.runtimeSettings,
@@ -2825,7 +2836,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
     const command = prefix.command;
     const args = [...prefix.args, ...this.defaultCommand.slice(1)];
-    const child = spawnProcess(command, args, {
+    const child = await spawnProviderProcess(command, args, {
       cwd: await this.resolveProcessCwd(),
       ...createProviderEnvSpec({
         runtimeSettings: this.runtimeSettings,

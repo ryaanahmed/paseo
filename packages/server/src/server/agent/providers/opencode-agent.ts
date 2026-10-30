@@ -74,7 +74,7 @@ import {
   type ProviderRuntimeSettings,
 } from "../provider-launch-config.js";
 import { withTimeout } from "../../../utils/promise-timeout.js";
-import { execCommand } from "../../../utils/spawn.js";
+import { execProviderCommand } from "../provider-admission.js";
 import { mapOpencodeToolCall } from "./opencode/tool-call-mapper.js";
 import {
   OPENCODE_EVENT_STREAM_READY_TIMEOUT_MS,
@@ -1503,6 +1503,7 @@ export class OpenCodeAgentClient implements AgentClient {
         false,
         unbindBridge,
         connectServer,
+        connection.runtimeId,
       );
     } catch (error) {
       await connection.release();
@@ -1558,6 +1559,7 @@ export class OpenCodeAgentClient implements AgentClient {
         registeredAcquisition !== null,
         unbindBridge,
         connectServer,
+        connection.runtimeId,
       );
     } catch (error) {
       await connection.release();
@@ -1595,6 +1597,7 @@ export class OpenCodeAgentClient implements AgentClient {
     directory: string,
   ): OpenCodeServerConnection {
     return {
+      runtimeId: acquisition.runtimeId,
       client: this.createOpenCodeClient({ baseUrl: acquisition.server.url, directory }),
       events: acquisition.events,
       environment: acquisition.environment,
@@ -1807,7 +1810,7 @@ export class OpenCodeAgentClient implements AgentClient {
         : null;
       if (authCommand) {
         try {
-          const { stdout, stderr } = await execCommand(
+          const { stdout, stderr } = await execProviderCommand(
             authCommand,
             [...launch.args, "auth", "list"],
             {
@@ -3361,6 +3364,7 @@ async function listOpenCodeChildSessions(
 
 /** One OpenCode server generation a session talks to. */
 interface OpenCodeServerConnection {
+  runtimeId?: string | null;
   environment: Record<string, string>;
   client: OpencodeClient;
   events: OpenCodeEventSource;
@@ -3458,9 +3462,11 @@ class OpenCodeAgentSession implements AgentSession {
     private readonly externallyDriven = false,
     releaseBridge?: () => void,
     connectServer?: () => Promise<OpenCodeServerConnection>,
+    runtimeId?: string | null,
   ) {
     this.config = config;
     this.server = {
+      runtimeId,
       client,
       events,
       url: serverUrl ?? "",
@@ -3856,6 +3862,14 @@ class OpenCodeAgentSession implements AgentSession {
       throw new Error(`OpenCode returned an unknown session status '${statusType ?? "missing"}'`);
     }
     return statusType;
+  }
+
+  getPhysicalRuntimeId(): string | null {
+    return this.serverExited || this.closed ? null : (this.server.runtimeId ?? null);
+  }
+
+  async prepareRuntime(): Promise<void> {
+    await this.reconnectIfServerExited();
   }
 
   async startTurn(

@@ -1,3 +1,4 @@
+import { getProviderRuntimeId } from "../../provider-admission.js";
 import { validateProviderOptions } from "../../provider-options.js";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -146,7 +147,7 @@ import {
 } from "../../provider-launch-config.js";
 import { withTimeout } from "../../../../utils/promise-timeout.js";
 import { terminateWithTreeKill } from "../../../../utils/tree-kill.js";
-import { execCommand } from "../../../../utils/spawn.js";
+import { execProviderCommand } from "../../provider-admission.js";
 import { composeSystemPromptParts } from "../../system-prompt.js";
 
 const fsPromises = promises;
@@ -1784,7 +1785,7 @@ export async function resolveClaudeCodeVersion(
     throw new Error("Claude binary not found while resolving Claude Code version");
   }
   const executable = availability.resolvedPath ?? launch.command;
-  const { stdout, stderr } = await execCommand(executable, [...launch.args, "--version"], {
+  const { stdout, stderr } = await execProviderCommand(executable, [...launch.args, "--version"], {
     ...createProviderEnvSpec({ runtimeSettings }),
     timeout: 5_000,
     signal,
@@ -1806,7 +1807,7 @@ async function resolveClaudeAuth(
     args: string[],
   ): Promise<{ stdout: string; stderr: string }> => {
     try {
-      return await execCommand(executable, args, {
+      return await execProviderCommand(executable, args, {
         ...createProviderEnvSpec({ runtimeSettings }),
         timeout: 5_000,
       });
@@ -2148,6 +2149,8 @@ class ClaudeAgentSession implements AgentSession {
   private readonly queryFactory?: ClaudeQueryFactory;
   private readonly resolveBinary: () => Promise<string>;
   private query: Query | null = null;
+  private queryOpening: Promise<Query> | null = null;
+  private readonly runtimeLaunchAbort = new AbortController();
   private readonly harnessEnvironment: Record<string, string>;
   private readonly usageSessionKey = randomUUID();
   private childProcess: ChildProcess | null = null;
@@ -2815,6 +2818,7 @@ class ClaudeAgentSession implements AgentSession {
       "provider.claude.session_close.start",
     );
     this.closed = true;
+    this.runtimeLaunchAbort.abort(new Error("Claude session closed"));
     this.rejectAllPendingPermissions(new Error("Claude session closed"));
     this.cancelCurrentTurn?.();
     this.subscribers.clear();
@@ -3240,7 +3244,27 @@ class ClaudeAgentSession implements AgentSession {
     return { kind: "fresh-session" };
   }
 
+  getPhysicalRuntimeId(): string | null {
+    return getProviderRuntimeId(this.childProcess);
+  }
+
+  async prepareRuntime(): Promise<void> {
+    await this.ensureQuery();
+  }
+
   private async ensureQuery(launchMode: PermissionMode = this.currentMode): Promise<Query> {
+    if (this.closed) throw new Error("Claude session closed");
+    if (this.queryOpening) return this.queryOpening;
+    const opening = this.openQuery(launchMode);
+    this.queryOpening = opening;
+    try {
+      return await opening;
+    } finally {
+      if (this.queryOpening === opening) this.queryOpening = null;
+    }
+  }
+
+  private async openQuery(launchMode: PermissionMode): Promise<Query> {
     if (this.query && !this.queryRestartNeeded) {
       return this.query;
     }
@@ -3285,11 +3309,13 @@ class ClaudeAgentSession implements AgentSession {
 
     const input = createAsyncMessageInput<SDKUserMessage>();
     const options = await this.buildOptions(launchMode);
+    options.abortController = this.runtimeLaunchAbort;
+    this.runtimeLaunchAbort.signal.throwIfAborted();
     this.logger.debug({ options: summarizeClaudeOptionsForLog(options) }, "claude query");
     this.input = input;
     // A fresh Claude process has no turn of its own in flight.
     this.mainTurnInFlight = false;
-    this.query = claudeQuery(
+    const openedQuery = await claudeQuery(
       { prompt: input.iterable, options },
       {
         runtimeSettings: this.runtimeSettings,
@@ -3301,6 +3327,11 @@ class ClaudeAgentSession implements AgentSession {
         },
       },
     );
+    if (this.closed) {
+      openedQuery.close();
+      throw new Error("Claude session closed");
+    }
+    this.query = openedQuery;
     const fastMode = this.resolveFastModeSetting();
     if (fastMode !== null) {
       await this.query.applyFlagSettings({ fastMode });

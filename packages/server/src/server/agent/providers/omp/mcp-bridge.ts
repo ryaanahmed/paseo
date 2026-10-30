@@ -1,3 +1,4 @@
+import { prepareProviderLaunch } from "../../provider-admission.js";
 import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -39,7 +40,7 @@ export class OmpMcpBridge {
       Object.entries(servers ?? {}).map(async ([serverName, config]) => {
         const client = new Client({ name: "paseo-omp-mcp", version: "1.0.0" });
         try {
-          const transport = makeTransport(config, cwd, env);
+          const transport = await makeTransport(config, cwd, env);
           await client.connect(transport, { timeout: SERVER_TIMEOUT_MS });
           const listed = await client.listTools(undefined, { timeout: SERVER_TIMEOUT_MS });
           return { serverName, client, tools: listed.tools };
@@ -108,11 +109,13 @@ export class OmpMcpBridge {
   }
 }
 
-function makeTransport(config: McpServerConfig, cwd: string, env: NodeJS.ProcessEnv) {
+async function makeTransport(config: McpServerConfig, cwd: string, env: NodeJS.ProcessEnv) {
   if (config.type === "stdio") {
+    const ticket = await prepareProviderLaunch();
+    const launch = ticket.command(config.command, config.args ?? []);
     return new StdioClientTransport({
-      command: config.command,
-      args: config.args,
+      command: launch.command,
+      args: launch.args,
       cwd,
       env: { ...env, ...config.env } as Record<string, string>,
       stderr: "ignore",

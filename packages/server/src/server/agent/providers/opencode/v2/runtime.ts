@@ -5,7 +5,7 @@ import type { V2Api } from "./api.js";
 import { randomBytes } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import type { Logger } from "pino";
-import { spawnProcess } from "../../../../../utils/spawn.js";
+import { spawnProviderProcess, getProviderRuntimeId } from "../../../provider-admission.js";
 import { terminateWithTreeKill } from "../../../../../utils/tree-kill.js";
 import {
   createProviderEnvSpec,
@@ -18,12 +18,14 @@ import { OpenCodeHttpError } from "../http-error.js";
 import { raceProviderRefreshAbort } from "../../../provider-refresh-deadline.js";
 
 export interface V2Connection {
+  runtimeId?: string | null;
   client: V2Api;
   release(): Promise<void>;
   retain(): V2Connection;
   readonly exited: Promise<Error>;
 }
 interface Generation {
+  runtimeId: string | null;
   client: V2Api;
   users: number;
   stop(): Promise<void>;
@@ -112,6 +114,7 @@ export class V2Runtime {
       await generation.stop();
     };
     return {
+      runtimeId: generation.runtimeId,
       client: generation.client,
       release,
       retain: () => this.lease(generation, pending),
@@ -164,7 +167,7 @@ export class V2Runtime {
       ? await this.options.decorateEnv(configured)
       : decorateOpenCodeV2Env(configured, await materializeOpenCodeV2Plugin(resolvePaseoHome()));
     const args = [...launch.args, "serve", "--hostname", "127.0.0.1", "--port", "0"];
-    const process = spawnProcess(launch.command, args, {
+    const process = await spawnProviderProcess(launch.command, args, {
       cwd,
       detached: globalThis.process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
@@ -253,7 +256,13 @@ export class V2Runtime {
         },
       });
       await client.server.info({ signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) });
-      const generation: Generation = { client, users: 0, stop, exited };
+      const generation: Generation = {
+        client,
+        users: 0,
+        stop,
+        exited,
+        runtimeId: getProviderRuntimeId(process),
+      };
       this.generations.add(generation);
       process.once("exit", () => {
         this.generations.delete(generation);

@@ -1272,6 +1272,15 @@ export class PiRpcAgentSession implements AgentSession {
     });
   }
 
+  getPhysicalRuntimeId(): string | null {
+    return this.runtimeSession.getPhysicalRuntimeId?.() ?? null;
+  }
+
+  async prepareRuntime(): Promise<void> {
+    // Runtime creation is eager; state is queried on the existing transport.
+    await this.runtimeSession.getState();
+  }
+
   async startTurn(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<StartTurnResult> {
     if (this.activeTurnId) {
       throw new Error("A Pi turn is already active");

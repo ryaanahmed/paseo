@@ -7,6 +7,7 @@ import type { ProviderRuntimeSettings } from "../../provider-launch-config.js";
 import {
   JSONL_RPC_NO_TIMEOUT,
   JsonlRpcProcess,
+  createJsonlRpcProcess,
   type JsonlRpcLaunch,
 } from "../jsonl-rpc-process.js";
 import { establishOmpProtocol } from "./protocol-session.js";
@@ -91,7 +92,8 @@ export class OmpCliRuntime implements OmpRuntime {
       defaultRequestTimeoutMs: this.options.requestTimeoutMs,
       ...(spawn ? { spawn: () => spawn(launch) } : {}),
     };
-    const process = new JsonlRpcProcess(processOptions);
+    const starting = createJsonlRpcProcess(processOptions);
+    const process = starting instanceof Promise ? await starting : starting;
     const handleAbort = () => void process.close(input.signal?.reason).catch(() => undefined);
     input.signal?.addEventListener("abort", handleAbort, { once: true });
     try {
@@ -112,6 +114,9 @@ export class OmpCliRuntime implements OmpRuntime {
 }
 
 class OmpCliRuntimeSession implements OmpRuntimeSession {
+  getPhysicalRuntimeId(): string | null {
+    return this.process.getPhysicalRuntimeId();
+  }
   private readonly subscribers = new Set<(event: OmpRuntimeEvent) => void>();
   activeBranchEntryId?: string;
 

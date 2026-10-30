@@ -16,7 +16,7 @@ interface ClaudeModelDiscoveryOptions {
 type OpenDiscoveryQuery = (
   input: ClaudeQueryInput,
   context: ClaudeQueryContext,
-) => Pick<Query, "supportedModels" | "close">;
+) => Pick<Query, "supportedModels" | "close"> | Promise<Pick<Query, "supportedModels" | "close">>;
 
 // The curated catalog survives a failed or slow probe. This process never receives
 // a prompt and must not persist a session or launch user MCP servers/hooks.
@@ -46,12 +46,12 @@ export async function discoverClaudeModels(
       };
     },
   };
-  let query: ReturnType<OpenDiscoveryQuery> | undefined;
+  let query: Awaited<ReturnType<OpenDiscoveryQuery>> | undefined;
   let child: ChildProcess | undefined;
   try {
     signal.throwIfAborted();
     const binary = await raceProviderRefreshAbort(signal, options.resolveBinary());
-    query = openQuery(
+    query = await openQuery(
       {
         prompt: input,
         options: {
