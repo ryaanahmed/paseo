@@ -110,8 +110,8 @@ test("runtime release hooks preserve disposal identity and propagate admission e
     cwd: "/project",
     physicalCloseProven: true,
   };
-  const remove = hooks.before("agent.runtime_release", ({ request }) => ({
-    ...request,
+  const remove = hooks.before("agent.runtime_release", ({ request: releaseRequest }) => ({
+    ...releaseRequest,
     agentId: "another",
   }));
   await expect(

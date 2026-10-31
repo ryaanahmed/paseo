@@ -1094,18 +1094,20 @@ test("orders a concurrent replacement after a pending accepted steer", async () 
       }
     })();
     await consumeInitial;
-    await vi.waitFor(() => expect(session.startCount).toBe(2));
-
+    // Provider start can precede durable timeline publication; observe both before asserting order.
+    await vi.waitFor(() => {
+      expect(session.startCount).toBe(2);
+      expect(
+        manager
+          .fetchTimeline(agent.id, { limit: 0 })
+          .rows.filter((row) => row.item.type === "user_message")
+          .map((row) => row.item),
+      ).toMatchObject([
+        { text: "hello", clientMessageId: "hello-client" },
+        { text: "replacement", clientMessageId: "replacement-client" },
+      ]);
+    });
     expect(session.interruptCount).toBe(1);
-    expect(
-      manager
-        .fetchTimeline(agent.id, { limit: 0 })
-        .rows.filter((row) => row.item.type === "user_message")
-        .map((row) => row.item),
-    ).toMatchObject([
-      { text: "hello", clientMessageId: "hello-client" },
-      { text: "replacement", clientMessageId: "replacement-client" },
-    ]);
   } finally {
     release.resolve();
     if (agentId) await manager.closeAgent(agentId).catch(() => undefined);

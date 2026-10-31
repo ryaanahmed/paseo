@@ -2025,6 +2025,34 @@ export class AgentManager {
     });
   }
 
+  private async verifyRetirementIdentity(agentId: string, expected: AgentRuntimeRetireInput) {
+    // Validate durable execution and ownership before inspecting queue and runtime custody.
+    const execution = await this.getExecution(agentId, {
+      kind: "execution",
+      executionId: expected.executionId,
+    });
+    const latest = await this.executionStore?.latest(agentId);
+    if (
+      !execution ||
+      execution.executionId !== expected.executionId ||
+      (execution.clientMessageId ?? null) !== expected.clientMessageId ||
+      execution.turnId !== expected.turnId ||
+      latest?.executionId !== execution.executionId ||
+      !["completed", "failed", "canceled"].includes(execution.status)
+    ) {
+      throw new Error("agent_runtime_retirement_execution_changed");
+    }
+    const record = await this.requireRegistry().get(agentId);
+    if (
+      !record ||
+      record.cwd !== expected.cwd ||
+      getParentAgentIdFromLabels(record.labels) !== expected.parentAgentId
+    ) {
+      throw new Error("agent_runtime_retirement_ownership_changed");
+    }
+    return { execution, record };
+  }
+
   retireAgentRuntime(
     agentId: string,
     expected: AgentRuntimeRetireInput,
@@ -2035,29 +2063,7 @@ export class AgentManager {
         this.retiringRuntimes.add(agentId);
         try {
           await this.drainSessionEvents(agentId);
-          const execution = await this.getExecution(agentId, {
-            kind: "execution",
-            executionId: expected.executionId,
-          });
-          const latest = await this.executionStore?.latest(agentId);
-          if (
-            !execution ||
-            execution.executionId !== expected.executionId ||
-            (execution.clientMessageId ?? null) !== expected.clientMessageId ||
-            execution.turnId !== expected.turnId ||
-            latest?.executionId !== execution.executionId ||
-            !["completed", "failed", "canceled"].includes(execution.status)
-          ) {
-            throw new Error("agent_runtime_retirement_execution_changed");
-          }
-          const record = await this.requireRegistry().get(agentId);
-          if (
-            !record ||
-            record.cwd !== expected.cwd ||
-            getParentAgentIdFromLabels(record.labels) !== expected.parentAgentId
-          ) {
-            throw new Error("agent_runtime_retirement_ownership_changed");
-          }
+          const { execution, record } = await this.verifyRetirementIdentity(agentId, expected);
           await this.messageQueue?.initialize();
           const agent = this.agents.get(agentId);
           if (
