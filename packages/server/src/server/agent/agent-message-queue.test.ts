@@ -255,3 +255,17 @@ test("deduplication ignores object property order and undefined after restart", 
   await queue.reconcile();
   expect(dispatched).toEqual(["one"]);
 });
+
+test("runtime retirement permits unsubmitted native packets but refuses uncertain admission", async () => {
+  expect(queue.hasUncertainAdmission("recipient")).toBe(false);
+  state = "busy";
+  await enqueue("pending");
+  expect(queue.hasUncertainAdmission("recipient")).toBe(false);
+  expect(queue.hasUncertainAdmission("unrelated")).toBe(false);
+  state = "idle";
+  await queue.reconcile();
+  expect(queue.hasUncertainAdmission("recipient")).toBe(true);
+  executions.set("pending", execution("pending", "completed"));
+  await queue.reconcile();
+  expect(queue.hasUncertainAdmission("recipient")).toBe(false);
+});

@@ -25,8 +25,35 @@ Reload releases the old runtime before resuming its durable session: an idle pro
 still own an exclusive writer. A close failure retains that runtime for cleanup and blocks the
 replacement. Once closure succeeds, a failed resume leaves the durable agent closed and retryable.
 
-Idle agents remain resident indefinitely. Runtime closure happens only through an explicit lifecycle
-action such as archive, replacement, reload, workspace teardown, or daemon shutdown.
+Managed workers can release residency with `agent.retireRuntime(expected)` after an exact settled
+execution. The caller supplies its execution, nullable submission, turn, parent and checkout identities.
+`execution({kind: "latest"})` returns the latest exact record, including unkeyed provider
+continuations; an absent or tied latest record is not an execution outcome.
+The daemon refuses unknown or superseded execution evidence, changed ownership, active provider
+work, pending permissions and uncertain native message admissions. Retirement is serialized with
+runtime loading and foreground admission; a racing direct prompt is rejected while closure runs.
+An acknowledged retirement closes the provider and releases the committed timeline cache, keeping
+the durable agent unarchived. A failed close retains its writer and reports failure. Failed timeline
+persistence retains the readable cache instead of discarding the only surviving copy.
+
+The SDK advertises `agents.supportsRuntimeRetirement()`; old hosts refuse rather than falling back
+to archive. Callers may retain their immutable queued packets independently, then send under the
+same identity after disposal. `closed` is resumable through the normal prompt path. Completion
+watches continue to use the unchanged durable execution and parent labels. Before returning, the
+daemon awaits the immutable `agent.runtime_release` hook while still holding the lifecycle lock.
+The hook includes `physicalCloseProven`, true only after a successful close in this daemon or
+an exact retained successful-close proof. Opening a new runtime clears that proof; daemon restart
+loses it. A stored `closed` snapshot alone is not proof that an orphan process stopped. On false,
+admission must retain current-OS-boot allocations and may only acknowledge absent allocations or
+ones proved obsolete by an OS reboot. An admission plugin releases a proven allocation there; a new same-agent runtime cannot open
+between confirmed closure and release. The hook repeats idempotently for an already-closed exact
+execution. A hook failure returns failure and permits retry; asynchronous `agent.closed` events do
+not prove that a replacement runtime has stopped. Snapshots expose `runtimeLoaded` independently
+of the last persisted status so startup admission can distinguish resident and stored-only agents. This operation never
+rewrites an unknown reboot outcome, archives descendants, or transfers checkout ownership.
+
+Other idle agents remain resident until an explicit lifecycle action such as archive, replacement,
+reload, workspace teardown, or daemon shutdown.
 
 A provider runtime can still die on its own — crash, OOM kill, host suspend. Work the agent parked
 inside that process dies with it: Claude Code's background Bash shells, `Monitor` watches, and

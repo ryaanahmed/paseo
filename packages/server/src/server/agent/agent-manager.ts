@@ -1,7 +1,12 @@
 import { GobstopperContextManager, stripGobstopperScope } from "./gobstopper-context.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
-import type { AgentExecution, AgentExecutionQuery } from "@getpaseo/protocol/agent-execution";
+import type {
+  AgentExecution,
+  AgentExecutionQuery,
+  AgentRuntimeRetireInput,
+  AgentRuntimeRetireResult,
+} from "@getpaseo/protocol/agent-execution";
 import { AgentExecutionStore } from "./agent-execution-store.js";
 import {
   AgentMessageQueue,
@@ -759,6 +764,10 @@ export class AgentManager {
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
   private readonly providerDefinitions = new Map<AgentProvider, ProviderEnabledFlag>();
   private readonly agents = new Map<string, LiveManagedAgent>();
+  private readonly retiringRuntimes = new Set<string>();
+  private readonly successfulRuntimeCloses = new Map<string, string>();
+  private readonly timelineWrites = new Map<string, Set<Promise<void>>>();
+  private readonly failedTimelineWrites = new Set<string>();
   private readonly timelineStore = new InMemoryAgentTimelineStore();
   private readonly providerSubagents = new ProviderSubagentStore();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
@@ -902,7 +911,8 @@ export class AgentManager {
     const record = await this.registry?.get(agentId);
     if (!record || record.archivedAt) return "unavailable";
     const agent = this.getAgent(agentId);
-    return this.hasInFlightRun(agentId) ||
+    return this.retiringRuntimes.has(agentId) ||
+      this.hasInFlightRun(agentId) ||
       agent?.pendingPermissions.size ||
       agent?.lifecycle === "running"
       ? "busy"
@@ -987,6 +997,7 @@ export class AgentManager {
         // Nothing may await between the final busy check and streamAgent's synchronous reservation.
         const agent = this.getAgent(message.agentId);
         if (
+          !agent ||
           this.hasInFlightRun(message.agentId) ||
           agent?.pendingPermissions.size ||
           agent?.lifecycle === "running"
@@ -2014,6 +2025,86 @@ export class AgentManager {
     });
   }
 
+  retireAgentRuntime(
+    agentId: string,
+    expected: AgentRuntimeRetireInput,
+  ): Promise<AgentRuntimeRetireResult> {
+    return this.runLifecycleMutation(agentId, () =>
+      this.runForegroundMutation(agentId, async () => {
+        // Reject direct provider admission while asynchronous evidence reads and closure run.
+        this.retiringRuntimes.add(agentId);
+        try {
+          await this.drainSessionEvents(agentId);
+          const execution = await this.getExecution(agentId, {
+            kind: "execution",
+            executionId: expected.executionId,
+          });
+          const latest = await this.executionStore?.latest(agentId);
+          if (
+            !execution ||
+            execution.executionId !== expected.executionId ||
+            (execution.clientMessageId ?? null) !== expected.clientMessageId ||
+            execution.turnId !== expected.turnId ||
+            latest?.executionId !== execution.executionId ||
+            !["completed", "failed", "canceled"].includes(execution.status)
+          ) {
+            throw new Error("agent_runtime_retirement_execution_changed");
+          }
+          const record = await this.requireRegistry().get(agentId);
+          if (
+            !record ||
+            record.cwd !== expected.cwd ||
+            getParentAgentIdFromLabels(record.labels) !== expected.parentAgentId
+          ) {
+            throw new Error("agent_runtime_retirement_ownership_changed");
+          }
+          await this.messageQueue?.initialize();
+          const agent = this.agents.get(agentId);
+          if (
+            (record.archivedAt && agent) ||
+            this.messageQueue?.hasUncertainAdmission(agentId) ||
+            this.hasInFlightRun(agentId) ||
+            agent?.pendingPermissions.size ||
+            (agent && !["idle", "error"].includes(agent.lifecycle)) ||
+            this.providerSubagents.list(agentId).some((child) => child.status === "running")
+          ) {
+            throw new Error("agent_runtime_retirement_busy");
+          }
+          if (
+            agent &&
+            (agent.cwd !== expected.cwd ||
+              getParentAgentIdFromLabels(agent.labels) !== expected.parentAgentId)
+          ) {
+            throw new Error("agent_runtime_retirement_ownership_changed");
+          }
+          // closeAgentRuntime retains ownership on failure and does not archive or cascade.
+          if (agent) await this.closeAgentRuntime(agentId);
+          const physicalCloseProven =
+            this.successfulRuntimeCloses.get(agentId) === execution.executionId;
+          await Promise.all(this.timelineWrites.get(agentId) ?? []);
+          if (this.durableTimelineStore && !this.failedTimelineWrites.has(agentId))
+            this.discardRetainedAgentState(agentId);
+          // Release admission before a same-identity reopen can enter the lifecycle lane.
+          // Failed release keeps the exact closed record retryable; unknown outcomes never reach here.
+          await this.pluginLifecycle?.before("agent.runtime_release", {
+            ...expected,
+            agentId,
+            physicalCloseProven,
+          });
+          return {
+            agentId,
+            executionId: execution.executionId,
+            retiredAt: new Date().toISOString(),
+            alreadyClosed: !agent,
+            physicalCloseProven,
+          };
+        } finally {
+          this.retiringRuntimes.delete(agentId);
+        }
+      }),
+    );
+  }
+
   closeAgent(agentId: string): Promise<void> {
     const existing = this.inFlightAgentCloses.get(agentId);
     if (existing) {
@@ -2078,6 +2169,8 @@ export class AgentManager {
     if (persistError !== undefined) {
       throw persistError;
     }
+    const latest = await this.executionStore?.latest(agentId);
+    if (latest) this.successfulRuntimeCloses.set(agentId, latest.executionId);
   }
 
   private cancelRunningProviderSubagents(parentAgentId: string): void {
@@ -2731,6 +2824,7 @@ export class AgentManager {
    * broadcast like normal timeline events.
    */
   tryRunOutOfBand(agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions): boolean {
+    if (this.retiringRuntimes.has(agentId)) throw new Error("agent_runtime_retiring");
     const agent = this.requireSessionAgent(agentId);
     const handler = agent.session.tryHandleOutOfBand?.(prompt);
     if (!handler) {
@@ -2922,6 +3016,7 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): AsyncGenerator<AgentStreamEvent> {
+    if (this.retiringRuntimes.has(agentId)) throw new Error("agent_runtime_retiring");
     const existingAgent = this.requireSessionAgent(agentId);
     this.logger.trace(
       {
@@ -5406,12 +5501,13 @@ export class AgentManager {
       return;
     }
     const task = this.durableTimelineStore.bulkInsert(agentId, [row]).catch((err) => {
+      this.failedTimelineWrites.add(agentId);
       this.logger.error(
         { err, agentId, seq: row.seq, itemType: row.item.type },
         "Failed to append timeline row to durable store",
       );
     });
-    this.trackBackgroundTask(task);
+    this.trackTimelineWrite(agentId, task);
   }
 
   private enqueueDurableTimelineBulkInsert(
@@ -5422,21 +5518,34 @@ export class AgentManager {
       return;
     }
     const task = this.durableTimelineStore.bulkInsert(agentId, rows).catch((err) => {
+      this.failedTimelineWrites.add(agentId);
       this.logger.error(
         { err, agentId, rowCount: rows.length },
         "Failed to seed durable timeline store",
       );
     });
-    this.trackBackgroundTask(task);
+    this.trackTimelineWrite(agentId, task);
   }
 
   private enqueueDurableTimelineUpdate(agentId: string, row: AgentTimelineRow): void {
     if (!this.durableTimelineStore) return;
     const task = this.durableTimelineStore.updateCommittedRow(agentId, row).catch((err) => {
+      this.failedTimelineWrites.add(agentId);
       this.logger.error(
         { err, agentId, seq: row.seq, itemType: row.item.type },
         "Failed to enrich durable timeline row",
       );
+    });
+    this.trackTimelineWrite(agentId, task);
+  }
+
+  private trackTimelineWrite(agentId: string, task: Promise<void>): void {
+    const pending = this.timelineWrites.get(agentId) ?? new Set<Promise<void>>();
+    pending.add(task);
+    this.timelineWrites.set(agentId, pending);
+    void task.finally(() => {
+      pending.delete(task);
+      if (pending.size === 0) this.timelineWrites.delete(agentId);
     });
     this.trackBackgroundTask(task);
   }
@@ -5721,6 +5830,8 @@ export class AgentManager {
       workspaceId?: string | null;
     },
   ): Promise<AgentLaunchContext> {
+    // An attempted replacement can own a process even if later registration fails.
+    this.successfulRuntimeCloses.delete(agentId);
     const cwd = config.cwd;
     const providerEnv = client.getLaunchEnvironment?.();
     env = { ...providerEnv, ...env };
@@ -5737,8 +5848,8 @@ export class AgentManager {
       const transformed = await this.pluginLifecycle.before("agent.session_open", request);
       env = { ...providerEnv, ...transformed.env };
     }
-    // Account hooks run first. Required context policy is enforced after them,
-    // outside their best-effort failure handling.
+    // Session hooks can refuse provider admission before any provider runtime opens.
+    // Required context policy is enforced after their environment transformations.
     let codexConfig: AgentLaunchContext["codexConfig"];
     if (config.contextPolicy && opening?.purpose !== "history") {
       if (!this.contextManager) {

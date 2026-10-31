@@ -28,6 +28,7 @@ export class AgentExecutionStore {
   async get(agentId: string, query: AgentExecutionQuery): Promise<AgentExecution | null> {
     await this.initialize();
     await this.mutation;
+    if (query.kind === "latest") return this.latest(agentId);
     if (query.kind === "execution") {
       const record = this.records.get(key(agentId, query.executionId));
       return record ? { ...record } : null;
@@ -37,6 +38,17 @@ export class AgentExecutionStore {
     if (executionKey === null) throw new Error("agent_execution_submission_ambiguous");
     const record = executionKey ? this.records.get(executionKey) : undefined;
     return record ? { ...record } : null;
+  }
+
+  async latest(agentId: string): Promise<AgentExecution | null> {
+    await this.initialize();
+    await this.mutation;
+    const records = [...this.records.values()].filter((record) => record.agentId === agentId);
+    records.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    const latest = records.at(-1);
+    if (!latest || records.filter((record) => record.startedAt === latest.startedAt).length !== 1)
+      return null;
+    return { ...latest };
   }
 
   create(record: AgentExecution): Promise<void> {

@@ -2034,3 +2034,46 @@ test.each([
   expect(ws.sent).toHaveLength(sentCount);
   await client.close();
 });
+
+test("runtime retirement checks host capability before sending and preserves exact identity", async () => {
+  const old = await connectClient({});
+  const expected = {
+    executionId: "execution",
+    clientMessageId: "message",
+    turnId: "turn",
+    parentAgentId: "parent",
+    cwd: "/repo",
+  };
+  expect(old.client.agents.supportsRuntimeRetirement()).toBe(false);
+  await expect(old.client.agents.ref("worker").retireRuntime(expected)).rejects.toThrow(
+    "Update the host to retire idle agent runtimes.",
+  );
+  expect(old.ws.sent).toHaveLength(1);
+  await old.client.close();
+  FakeWebSocket.instances.length = 0;
+
+  const { client, ws } = await connectClient({ agentRuntimeRetirement: true });
+  expect(client.agents.supportsRuntimeRetirement()).toBe(true);
+  const retiring = client.agents.ref("worker").retireRuntime(expected);
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "agent.runtime.retire.request",
+    agentId: "worker",
+    expected,
+  });
+  const result = {
+    agentId: "worker",
+    executionId: "execution",
+    retiredAt: "2026-10-29T00:00:00.000Z",
+    alreadyClosed: false,
+    physicalCloseProven: true,
+  };
+  ws.message(
+    sessionMessage({
+      type: "agent.runtime.retire.response",
+      payload: { requestId: request.requestId, result, error: null },
+    }),
+  );
+  await expect(retiring).resolves.toEqual(result);
+  await client.close();
+});

@@ -1,3 +1,4 @@
+import type { AgentRuntimeRetireInput } from "@getpaseo/protocol/agent-execution";
 import type {
   AgentPermissionRequest,
   AgentPermissionResponse,
@@ -68,6 +69,11 @@ export interface PluginLifecycleEvents {
 export interface PluginBeforeRequests {
   "agent.create": { config: AgentSessionConfig; env?: Record<string, string> };
   "agent.session_open": PluginSessionOpenRequest;
+  /** Confirmed idle disposal, before another runtime can acquire this agent identity. */
+  "agent.runtime_release": AgentRuntimeRetireInput & {
+    agentId: string;
+    physicalCloseProven: boolean;
+  };
   "workspace.create": Omit<WorkspaceCreateRequest, "type" | "requestId">;
 }
 
