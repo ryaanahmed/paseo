@@ -77,33 +77,42 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("queues ordinary CLI sends and reports durable acceptance with a stable message ID", async () => {
-  vi.stubEnv("PASEO_AGENT_ID", "");
-  const client = recordingClient();
-  const result = await runSendCommand(
-    "recipient",
-    "hello",
-    { daemonTarget, wait: false },
-    new Command(),
-  );
-  expect(client.send).toHaveBeenCalledWith("resolved-recipient", "hello", {
-    images: undefined,
-    sourceAgentId: undefined,
-    activeTurnBehavior: "queue",
-    messageId: expect.any(String),
-  });
-  expect(result.data).toEqual({
-    agentId: "resolved-recipient",
-    status: "queued",
-    messageId: client.send.mock.calls[0]?.[2]?.messageId,
-    message: "Message queued; not waiting for execution",
-  });
-  expect(client.wait).not.toHaveBeenCalled();
-  expect(client.execution).not.toHaveBeenCalled();
-  expect(client.close).toHaveBeenCalledOnce();
-});
+it.each(["", "sender"])(
+  "interrupts CLI sends with source %j and reports acceptance",
+  async (sourceAgentId) => {
+    vi.stubEnv("PASEO_AGENT_ID", sourceAgentId);
+    const client = recordingClient();
+    client.send.mockResolvedValue({
+      requestId: "request",
+      agentId: "resolved-recipient",
+      accepted: true,
+      error: null,
+    });
+    const result = await runSendCommand(
+      "recipient",
+      "hello",
+      { daemonTarget, wait: false },
+      new Command(),
+    );
+    expect(client.send).toHaveBeenCalledWith("resolved-recipient", "hello", {
+      images: undefined,
+      sourceAgentId: sourceAgentId || undefined,
+      activeTurnBehavior: "interrupt",
+      messageId: expect.any(String),
+    });
+    expect(result.data).toEqual({
+      agentId: "resolved-recipient",
+      status: "sent",
+      messageId: client.send.mock.calls[0]?.[2]?.messageId,
+      message: "Message accepted; not waiting for completion",
+    });
+    expect(client.wait).not.toHaveBeenCalled();
+    expect(client.execution).not.toHaveBeenCalled();
+    expect(client.close).toHaveBeenCalledOnce();
+  },
+);
 
-it("makes interruption explicit without coupling it to --no-wait", async () => {
+it("accepts explicit interruption without coupling it to --no-wait", async () => {
   vi.stubEnv("PASEO_AGENT_ID", "sender");
   const client = recordingClient();
   client.send.mockResolvedValue({
@@ -134,12 +143,15 @@ it("waits for its own queued submission across an unrelated turn finishing", asy
     .mockResolvedValueOnce(receipt("running"))
     .mockResolvedValueOnce(receipt("completed"));
   let finished = false;
-  const pending = runSendCommand("recipient", "next", { daemonTarget }, new Command()).then(
-    (result) => {
-      finished = true;
-      return result;
-    },
-  );
+  const pending = runSendCommand(
+    "recipient",
+    "next",
+    { daemonTarget, queue: true },
+    new Command(),
+  ).then((result) => {
+    finished = true;
+    return result;
+  });
   await vi.advanceTimersByTimeAsync(0);
   expect(finished).toBe(false);
   await vi.advanceTimersByTimeAsync(1000);
@@ -166,7 +178,12 @@ it.each(["failed", "canceled", "unknown"] as const)(
   async (status) => {
     const client = recordingClient();
     client.execution.mockResolvedValue(receipt(status));
-    const result = await runSendCommand("recipient", "next", { daemonTarget }, new Command());
+    const result = await runSendCommand(
+      "recipient",
+      "next",
+      { daemonTarget, queue: true },
+      new Command(),
+    );
     expect(result.data).toMatchObject({
       status: "error",
       executionId: "this-execution",
@@ -178,7 +195,7 @@ it.each(["failed", "canceled", "unknown"] as const)(
 it("times out while the exact submission remains pending instead of declaring idle success", async () => {
   vi.useFakeTimers();
   const client = recordingClient();
-  const pending = runSendCommand("recipient", "next", { daemonTarget }, new Command());
+  const pending = runSendCommand("recipient", "next", { daemonTarget, queue: true }, new Command());
   await vi.advanceTimersByTimeAsync(600000);
   expect((await pending).data).toMatchObject({ status: "timeout", messageId: expect.any(String) });
   expect(client.wait).not.toHaveBeenCalled();
@@ -198,7 +215,12 @@ it("preserves durable acceptance when the connection drops while observing execu
   client.execution.mockRejectedValue(
     Object.assign(new Error("connection closed"), { code: "ECONNRESET" }),
   );
-  const result = await runSendCommand("recipient", "next", { daemonTarget }, new Command());
+  const result = await runSendCommand(
+    "recipient",
+    "next",
+    { daemonTarget, queue: true },
+    new Command(),
+  );
   expect(result.data).toEqual({
     agentId: "resolved-recipient",
     messageId: client.send.mock.calls[0]?.[2]?.messageId,
@@ -217,7 +239,12 @@ it("retains the exact submission identity when durable enqueue succeeds but its 
     persisted.push({ agentId, messageId: options?.messageId });
     throw Object.assign(new Error("acknowledgement timed out"), { code: "DAEMON_REQUEST_TIMEOUT" });
   });
-  const result = await runSendCommand("recipient-prefix", "next", { daemonTarget }, new Command());
+  const result = await runSendCommand(
+    "recipient-prefix",
+    "next",
+    { daemonTarget, queue: true },
+    new Command(),
+  );
   expect(client.fetch).toHaveBeenCalledWith({ agentId: "recipient-prefix" });
   expect(persisted).toEqual([{ agentId: "resolved-recipient", messageId: expect.any(String) }]);
   expect(result.data).toMatchObject({
@@ -242,7 +269,7 @@ it("retains the exact submission identity when durable enqueue succeeds but its 
 it("distinguishes explicit rejection from uncertain submission and preserves its attempted identity", async () => {
   const client = recordingClient();
   client.send.mockRejectedValue(new AgentMessageRejectedError("Update the Paseo host"));
-  const pending = runSendCommand("recipient", "next", { daemonTarget }, new Command());
+  const pending = runSendCommand("recipient", "next", { daemonTarget, queue: true }, new Command());
   await expect(pending).rejects.toMatchObject({
     code: "SEND_REJECTED",
     message: "Update the Paseo host",
@@ -250,4 +277,16 @@ it("distinguishes explicit rejection from uncertain submission and preserves its
   });
   expect(client.send).toHaveBeenCalledOnce();
   expect(client.close).toHaveBeenCalledOnce();
+});
+
+it("accepts explicit queueing without waiting and refuses conflicting delivery flags", () => {
+  const queued = addSendOptions(new Command());
+  queued.parse(["recipient", "next", "--queue", "--no-wait"], { from: "user" });
+  expect(queued.opts()).toMatchObject({ queue: true, wait: false });
+  const conflicting = addSendOptions(new Command())
+    .exitOverride()
+    .configureOutput({ writeErr: () => {} });
+  expect(() =>
+    conflicting.parse(["recipient", "next", "--queue", "--interrupt"], { from: "user" }),
+  ).toThrow();
 });

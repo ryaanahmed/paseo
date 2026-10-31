@@ -915,6 +915,7 @@ test("agent messages enqueue before provider loading, mode changes, or run start
     source: { kind: "agent-message", agentId: "sender" },
     messageId: "submission-1",
     sessionMode: "full-access",
+    activeTurnBehavior: "queue",
     queuedFinishNotification: { callerAgentId: "sender" },
     logger: createTestLogger(),
   });
@@ -933,4 +934,92 @@ test("agent messages enqueue before provider loading, mode changes, or run start
   });
   expect(setMode).not.toHaveBeenCalled();
   expect(stream).not.toHaveBeenCalled();
+});
+
+test("agent messages interrupt an active recipient by default without entering its queue", async () => {
+  const agentManager = new AgentManager({ clients: {}, logger: createTestLogger() });
+  const recipient: ManagedAgent = Object.create(null);
+  Reflect.set(recipient, "id", "recipient");
+  Reflect.set(recipient, "config", { title: "Recipient" });
+  Reflect.set(recipient, "pendingPermissions", new Map());
+  vi.spyOn(agentManager, "getAgent").mockReturnValue(recipient);
+  vi.spyOn(agentManager, "hasInFlightRun").mockReturnValue(true);
+  vi.spyOn(agentManager, "tryRunOutOfBand").mockReturnValue(false);
+  const replace = vi
+    .spyOn(agentManager, "replaceAgentRun")
+    .mockResolvedValue((async function* () {})());
+  const enqueue = vi.spyOn(agentManager, "enqueueAgentMessage");
+  const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
+  Reflect.set(agentStorage, "get", async () => null);
+  const result = await sendPromptToAgent({
+    agentManager,
+    agentStorage,
+    agentId: "recipient",
+    prompt: "Read this now",
+    source: { kind: "agent-message", agentId: "sender" },
+    messageId: "urgent-message",
+    logger: createTestLogger(),
+  });
+  expect(result).toEqual({ disposition: "turn_started" });
+  expect(replace).toHaveBeenCalledOnce();
+  expect(replace.mock.calls[0]![1]).toContain("Paseo delivery note");
+  expect(parseAgentMessage(replace.mock.calls[0]![1] as string)).toMatchObject({
+    id: "urgent-message",
+    text: "Read this now",
+    source: { kind: "agent-message", agentId: "sender" },
+  });
+  expect(enqueue).not.toHaveBeenCalled();
+});
+
+it.each([
+  { kind: "agent-message" as const, agentId: "sender" },
+  { kind: "agent-notification" as const, agentId: "sender", event: "finished" as const },
+])(
+  "prefaces interrupting $kind delivery without changing sender text or replay identity",
+  (source) => {
+    const message = { id: "delivery-1", source, text: "Please review <the result>." };
+    const prompt = formatAgentMessage(message, { interrupting: true });
+    expect(prompt).toContain('delivery="interrupt"');
+    expect(prompt).toContain("not a user request to cancel or abandon your previous task");
+    expect(prompt).toContain(
+      "resume unfinished work unless it explicitly redirects or cancels that work",
+    );
+    expect(prompt).toContain("Check the outcomes of interrupted commands before retrying");
+    expect(parseAgentMessage(prompt)).toEqual(message);
+    expect(
+      projectAgentMessage({
+        type: "user_message",
+        text: prompt,
+        timestamp: "2026-10-31T00:00:00Z",
+      }),
+    ).toMatchObject({
+      type: "tool_call",
+      callId: "paseo-agent-message:delivery-1",
+      agentMessage: { text: message.text },
+    });
+    const queued = formatAgentMessage(message, { interrupting: false });
+    expect(queued).not.toContain("Paseo delivery note");
+    expect(parseAgentMessage(queued)).toEqual(message);
+  },
+);
+
+it("keeps ordinary user messages and image attachments intact when adding delivery guidance", () => {
+  expect(prepareAgentMessage("Stop this task", undefined, "human", { interrupting: true })).toEqual(
+    {
+      prompt: "Stop this task",
+      messageId: "human",
+    },
+  );
+  const image = { type: "image" as const, data: "fixture", mimeType: "image/png" };
+  const prepared = prepareAgentMessage(
+    [{ type: "text", text: "Inspect this" }, image],
+    { kind: "agent-message", agentId: "sender" },
+    "image-message",
+    { interrupting: true },
+  );
+  expect(prepared.prompt).toEqual([
+    { type: "text", text: expect.stringContaining("Paseo delivery note") },
+    image,
+  ]);
+  expect(prepared.messageId).toBe("image-message");
 });

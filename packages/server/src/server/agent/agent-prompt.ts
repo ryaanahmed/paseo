@@ -316,8 +316,8 @@ async function resolvePromptSource(
 }
 
 /**
- * Agent messages are durably queued before loading a provider. Explicit interruption
- * and human prompts use (optional unarchive) → load → (optional mode change) → start run.
+ * Messages interrupt by default using (optional unarchive) → load → (optional mode change)
+ * → start run. Explicit queue requests are persisted before loading a provider.
  *
  * Every surface that sends a prompt to an agent (Session/WS, MCP, CLI-through-MCP,
  * chat mentions, notify-on-finish) MUST go through this so behavior can never
@@ -330,12 +330,13 @@ export async function sendPromptToAgent(
   params: SendPromptToAgentParams,
 ): Promise<{ disposition: PromptDispatchDisposition }> {
   const unarchive = params.unarchive ?? true;
-  const activeTurnBehavior = params.activeTurnBehavior ?? (params.source ? "queue" : undefined);
+  const activeTurnBehavior = params.activeTurnBehavior ?? "interrupt";
   const source = await resolvePromptSource(params.source, params.agentManager, params.agentStorage);
   const delivery = prepareAgentMessage(
     params.prompt,
     source,
     params.messageId ?? params.runOptions?.clientMessageId,
+    { interrupting: activeTurnBehavior === "interrupt" },
   );
   const runOptions = delivery.messageId
     ? { ...params.runOptions, clientMessageId: delivery.messageId }
@@ -389,7 +390,7 @@ export async function sendPromptToAgent(
   return await startAgentRun(params.agentManager, params.agentId, delivery.prompt, params.logger, {
     replaceRunning: true,
     onDispatch: params.onDispatch,
-    activeTurnBehavior: params.activeTurnBehavior,
+    activeTurnBehavior,
     clearPendingPermissions: params.clearPendingPermissions,
     runOptions,
   });
@@ -571,7 +572,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         agentId: childAgentId,
         event: finishNotificationEvents[reason],
       },
-      activeTurnBehavior: "queue",
+      activeTurnBehavior: "interrupt",
       unarchive: false,
       logger,
     });

@@ -1140,7 +1140,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       .boolean()
       .optional()
       .describe(
-        "Interrupt the recipient's current turn. Agent messages queue until the recipient is idle by default.",
+        "Interrupt the recipient's current turn (default true). Set false to queue until the recipient is available.",
       ),
     sessionMode: z.string().optional().describe("Optional mode to set before running the prompt."),
   };
@@ -1894,7 +1894,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     {
       title: "Send agent prompt",
       description:
-        "Send a task and return after acceptance. Agent messages queue until the recipient is idle unless interrupt is true. Calling agents receive finish notifications by default.",
+        "Send a task and return after acceptance. Messages interrupt the active turn by default; set interrupt to false to queue. Calling agents receive finish notifications by default.",
       inputSchema: sendAgentPromptInputSchema,
       outputSchema: {
         success: z.boolean(),
@@ -1907,7 +1907,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       agentId,
       prompt,
       sessionMode,
-      interrupt,
+      interrupt = true,
       notifyOnFinish = Boolean(callerAgentId),
     }) => {
       let stopNotification: (() => void) | undefined;

@@ -748,7 +748,12 @@ test("agents.create with internal fails before sending on a host without interna
 });
 
 test("agent handles delegate create, send, timeline refetch, archive, and local updates", async () => {
-  const { client, ws } = await connectClient();
+  const { client, ws } = await connectClient({
+    providerUsageList: true,
+    providersSnapshotCwd: true,
+    ownedSubscriptions: true,
+    agentMessageProvenance: true,
+  });
   const createdAgent = createAgent();
 
   const createPromise = client.agents.create({
@@ -828,7 +833,7 @@ test("agent handles delegate create, send, timeline refetch, archive, and local 
 
   const runPromise = agent.run("finish the task", {
     messageId: "run-message-sdk",
-    activeTurnBehavior: "interrupt",
+    sourceAgentId: "coordinator",
     timeoutMs: 30_000,
   });
   const runSendRequest = parseSentSessionMessage(ws.sent.at(-1));
@@ -2013,19 +2018,19 @@ test("plugin actions preserve daemon RPC errors without retrying", async () => {
   await client.close();
 });
 
-test.each([{ activeTurnBehavior: "queue" as const }, { sourceAgentId: "coordinator" }])(
-  "agent run refuses queued delivery before sending: %j",
-  async (options) => {
-    const { client, ws } = await connectClient({
-      agentExecutionOutcomes: true,
-      agentMessageQueue: true,
-      agentMessageProvenance: true,
-    });
-    const sentCount = ws.sent.length;
-    await expect(client.agents.ref("agent_sdk").run("next", options)).rejects.toThrow(
-      "Use agent.send() with a stable messageId",
-    );
-    expect(ws.sent).toHaveLength(sentCount);
-    await client.close();
-  },
-);
+test.each([
+  { activeTurnBehavior: "queue" as const },
+  { activeTurnBehavior: "queue" as const, sourceAgentId: "coordinator" },
+])("agent run refuses queued delivery before sending: %j", async (options) => {
+  const { client, ws } = await connectClient({
+    agentExecutionOutcomes: true,
+    agentMessageQueue: true,
+    agentMessageProvenance: true,
+  });
+  const sentCount = ws.sent.length;
+  await expect(client.agents.ref("agent_sdk").run("next", options)).rejects.toThrow(
+    "Use agent.send() with a stable messageId",
+  );
+  expect(ws.sent).toHaveLength(sentCount);
+  await client.close();
+});

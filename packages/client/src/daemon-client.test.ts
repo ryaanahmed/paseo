@@ -7516,7 +7516,7 @@ test.each([false, true])(
       messageId: "delivery",
     });
     expect(request.sourceAgentId).toBe(supported ? "server::sender" : undefined);
-    expect(request.activeTurnBehavior).toBe(supported ? "queue" : undefined);
+    expect(request.activeTurnBehavior).toBe("interrupt");
     transport.triggerMessage(
       wrapSessionMessage({
         type: "send_agent_message_response",
@@ -7532,7 +7532,7 @@ test.each([false, true])(
   },
 );
 
-test("queue delivery refuses old hosts before sending, while explicit interruption still works", async () => {
+test("explicit queueing refuses old hosts while default agent interruption still works", async () => {
   const transport = createMockTransport();
   const client = new DaemonClient({
     url: "ws://test",
@@ -7548,7 +7548,10 @@ test("queue delivery refuses old hosts before sending, while explicit interrupti
     client.sendAgentMessage("recipient", "queued", { activeTurnBehavior: "queue" }),
   ).rejects.toThrow("Update the Paseo host to queue messages");
   await expect(
-    client.sendAgentMessage("recipient", "queued", { sourceAgentId: "sender" }),
+    client.sendAgentMessage("recipient", "queued", {
+      sourceAgentId: "sender",
+      activeTurnBehavior: "queue",
+    }),
   ).rejects.toThrow("Update the Paseo host to queue messages");
   expect(transport.sent).toHaveLength(0);
   await expect(
@@ -7557,7 +7560,6 @@ test("queue delivery refuses old hosts before sending, while explicit interrupti
 
   const sent = client.sendAgentMessage("recipient", "interrupt", {
     sourceAgentId: "sender",
-    activeTurnBehavior: "interrupt",
   });
   const request = parseSentFrame(transport.sent[0]);
   expect(request.activeTurnBehavior).toBe("interrupt");

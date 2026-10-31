@@ -8233,8 +8233,7 @@ export class Session {
         },
         "agent.session.send_agent_message",
       );
-      const queued =
-        (msg.activeTurnBehavior ?? (msg.sourceAgentId ? "queue" : "interrupt")) === "queue";
+      const queued = (msg.activeTurnBehavior ?? "interrupt") === "queue";
       const send = async () => {
         const result = await sendPromptToAgent({
           agentManager: this.agentManager,
@@ -8245,7 +8244,7 @@ export class Session {
             ? { kind: "agent-message", agentId: msg.sourceAgentId }
             : undefined,
           messageId: msg.messageId,
-          activeTurnBehavior: msg.activeTurnBehavior ?? (msg.sourceAgentId ? "queue" : "interrupt"),
+          activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
           clearPendingPermissions: true,
           logger: this.sessionLogger,
         });
@@ -8265,8 +8264,7 @@ export class Session {
           request: {
             prompt,
             sourceAgentId: msg.sourceAgentId,
-            activeTurnBehavior:
-              msg.activeTurnBehavior ?? (msg.sourceAgentId ? "queue" : "interrupt"),
+            activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
           },
           prepare: async () => {
             // Refuse archived recipients before opening a provider session.

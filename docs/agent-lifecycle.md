@@ -50,12 +50,19 @@ older cancellation from settling a newer turn. If interruption is rejected or ti
 keeps its active foreground turn and replacement, reload, rewind, and Stop report the failure.
 Accepting new work after an ambiguous interruption would create a split-brain session.
 
-## Queued agent messages
+## Agent message delivery
 
-Agent-to-agent sends and finish notifications wait behind the recipient's current
-turn. Queue acceptance and execution are separate: callers must keep the message
-ID and observe its exact execution, rather than treating the recipient's next idle
-state as completion. Deliberate interruption remains an explicit send option.
+Agent-to-agent sends and finish notifications interrupt the recipient's current
+turn by default so coordination reaches active agents. Queueing is opt-in through
+CLI `--queue`, MCP `interrupt: false`, or SDK `activeTurnBehavior: "queue"`.
+Interrupting agent messages carry a delivery note: interruption is not a user
+cancellation of the previous task. The recipient handles the message and resumes
+unfinished work unless redirected, checking interrupted command outcomes before
+retrying. The note is separate from sender text in the projected timeline.
+
+Queue acceptance and execution are separate: callers must keep the message ID
+and observe its exact execution, rather than treating the recipient's next idle
+state as completion.
 
 The daemon owns pending messages across client disconnects and restarts. An
 uncertain provider admission is retained for reconciliation and is never replayed

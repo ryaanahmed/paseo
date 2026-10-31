@@ -4005,15 +4005,12 @@ describe("send_agent_prompt MCP tool", () => {
 
     const response = await tool.handler(parsed.data as Record<string, unknown>);
 
-    expect(spies.agentManager.subscribe).not.toHaveBeenCalled();
-    expect(spies.agentManager.enqueueAgentMessage).toHaveBeenCalledWith(
-      "child-agent",
-      expect.any(String),
-      { clientMessageId: expect.any(String) },
-      { sessionMode: undefined, notifyOnFinish: { callerAgentId: "parent-agent" } },
-    );
-    expect(spies.agentManager.waitForAgentRunStart).not.toHaveBeenCalled();
-    expect(response.structuredContent.disposition).toBe("queued");
+    expect(spies.agentManager.subscribe).toHaveBeenCalledOnce();
+    expect(spies.agentManager.enqueueAgentMessage).not.toHaveBeenCalled();
+    expect(spies.agentManager.waitForAgentRunStart).toHaveBeenCalledWith("child-agent", {
+      signal: expect.any(AbortSignal),
+    });
+    expect(response.structuredContent.disposition).toBe("turn_started");
     expect(spies.agentManager.waitForAgentEvent).not.toHaveBeenCalled();
     expect(response.structuredContent.guidance).toBe(
       "You will get notified when the prompted agent finishes, errors, or needs permission. Do not poll for status; continue with other work until the notification arrives.",
@@ -4052,9 +4049,11 @@ describe("send_agent_prompt MCP tool", () => {
     });
 
     const response = await tool.handler(parsed.data as Record<string, unknown>);
-    expect(response.structuredContent.disposition).toBe("queued");
-    expect(spies.agentManager.enqueueAgentMessage).toHaveBeenCalledTimes(1);
-    expect(spies.agentManager.waitForAgentRunStart).not.toHaveBeenCalled();
+    expect(response.structuredContent.disposition).toBe("turn_started");
+    expect(spies.agentManager.enqueueAgentMessage).not.toHaveBeenCalled();
+    expect(spies.agentManager.waitForAgentRunStart).toHaveBeenCalledWith("child-agent", {
+      signal: expect.any(AbortSignal),
+    });
 
     expect(spies.agentManager.subscribe).not.toHaveBeenCalled();
     expect(spies.agentManager.waitForAgentEvent).not.toHaveBeenCalled();
@@ -4336,6 +4335,77 @@ describe("send_agent_prompt MCP tool", () => {
       await removeAgentStateDir(agentManager, storage, workdir);
     }
   });
+  it("interrupts a running child by default and observes only the replacement completion", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "mcp-interrupt-running-child-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const parentClient = new HeldTurnAgentClient("claude", false);
+    const childClient = new HeldTurnAgentClient("codex", true);
+    const agentManager = new AgentManager({
+      clients: { claude: parentClient, codex: childClient },
+      registry: storage,
+      messageQueueDirectory: join(workdir, "message-queue"),
+      executionStore: new AgentExecutionStore(join(workdir, "executions")),
+      logger,
+    });
+
+    try {
+      const parent = await agentManager.createAgent(
+        { provider: "claude", cwd: existingCwd },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        callerAgentId: parent.id,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+
+      const created = await invokeToolWithParsedInput(registeredTool(server, "create_agent"), {
+        relationship: { kind: "subagent" },
+        workspace: { kind: "current" },
+        title: "Busy Child",
+        provider: "codex/gpt-5.4",
+        initialPrompt: "Run a long command",
+        notifyOnFinish: false,
+      });
+      const childId = z.object({ agentId: z.string() }).parse(created.structuredContent).agentId;
+      await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
+
+      const sent = await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+        agentId: childId,
+        prompt: "Handle this message now",
+      });
+      expect(sent.structuredContent).toMatchObject({
+        success: true,
+        disposition: "turn_started",
+        status: "running",
+      });
+      const childSession = childClient.sessions[0]!;
+      expect(childSession.prompts).toHaveLength(2);
+      expect(parseAgentMessage(childSession.prompts[1])?.text).toBe("Handle this message now");
+      expect(parentClient.sessions[0]!.prompts).toHaveLength(0);
+      await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
+      childSession.finishTurn("Follow-up finished");
+
+      function finishNotifications() {
+        return (parentClient.sessions[0]?.prompts ?? []).filter((prompt) =>
+          prompt.includes(`Agent ${childId} (Busy Child) finished.`),
+        );
+      }
+      await vi.waitFor(() => expect(finishNotifications()).not.toHaveLength(0), { timeout: 3000 });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(finishNotifications()).toHaveLength(1);
+      expect(parentClient.sessions[0]!.prompts).toHaveLength(1);
+      expect(parseAgentMessage(parentClient.sessions[0]!.prompts[0])).toMatchObject({
+        source: { kind: "agent-notification", agentId: childId, event: "finished" },
+      });
+    } finally {
+      await removeAgentStateDir(agentManager, storage, workdir);
+    }
+  });
+
   it("queues a follow-up without canceling the current turn or notifying for its completion", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-send-running-child-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
@@ -4377,6 +4447,7 @@ describe("send_agent_prompt MCP tool", () => {
       const sent = await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
         agentId: childId,
         prompt: "Reply after the current task",
+        interrupt: false,
       });
       expect(sent.structuredContent).toMatchObject({
         success: true,
@@ -4409,7 +4480,7 @@ describe("send_agent_prompt MCP tool", () => {
     }
   });
 
-  it("queues one exact startup-failure notification without interrupting the caller", async () => {
+  it("interrupts the caller with one exact queued-startup failure notification", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-queued-start-failure-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
     const parentClient = new HeldTurnAgentClient("claude", true);
@@ -4450,17 +4521,16 @@ describe("send_agent_prompt MCP tool", () => {
         {
           agentId: child.id,
           prompt: "Queued task",
+          interrupt: false,
         },
       );
       expect(response.structuredContent).toMatchObject({ success: true, disposition: "queued" });
       await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("error"));
-      expect(parentClient.sessions[0]!.prompts).toEqual(["Keep working"]);
-      expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("running");
-      parentClient.sessions[0]!.finishTurn();
-      await parentRun;
       await vi.waitFor(() => expect(parentClient.sessions[0]!.prompts).toHaveLength(2), {
         timeout: 3000,
       });
+      await parentRun;
+      expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("running");
       const notification = parseAgentMessage(parentClient.sessions[0]!.prompts[1])!;
       expect(notification.source).toMatchObject({
         kind: "agent-notification",
@@ -4529,6 +4599,7 @@ describe("send_agent_prompt MCP tool", () => {
       const pending = invokeToolWithParsedInput(tool, {
         agentId: child.id,
         prompt: "Follow up",
+        interrupt: false,
       });
       await vi.waitFor(() => expect(childSession.prompts).toHaveLength(1));
       expect(parseAgentMessage(childSession.prompts[0])).toEqual({

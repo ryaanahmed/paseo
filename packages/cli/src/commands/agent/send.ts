@@ -1,7 +1,7 @@
 import { AgentMessageRejectedError } from "@getpaseo/client/internal/daemon-client";
 import { randomUUID } from "node:crypto";
 import type { AgentExecution } from "@getpaseo/protocol/agent-execution";
-import { type Command } from "commander";
+import { type Command, Option } from "commander";
 import { collectMultiple } from "../../utils/command-options.js";
 import { connectToDaemon } from "../../utils/client.js";
 import type {
@@ -36,6 +36,7 @@ export const agentSendSchema: OutputSchema<AgentSendResult> = {
 export interface AgentSendOptions extends CommandOptions {
   wait?: boolean;
   interrupt?: boolean;
+  queue?: boolean;
   image?: string[];
   prompt?: string;
   promptFile?: string;
@@ -43,13 +44,16 @@ export interface AgentSendOptions extends CommandOptions {
 
 export function addSendOptions(cmd: Command): Command {
   return cmd
-    .description("Send a message/task to an existing agent (queued by default)")
+    .description("Send a message/task to an existing agent (interrupts by default)")
     .argument("<id>", "Agent ID (or prefix)")
     .argument("[prompt]", "The message to send")
     .option("--prompt <text>", "Provide the message inline as a flag")
     .option("--prompt-file <path>", "Read the message from a UTF-8 text file")
     .option("--image <path>", "Attach image(s) to the message", collectMultiple, [])
-    .option("--interrupt", "Interrupt the active turn instead of queuing this message")
+    .option("--interrupt", "Interrupt the active turn (default)")
+    .addOption(
+      new Option("--queue", "Queue until the recipient is available").conflicts("interrupt"),
+    )
     .option("--wait", "Wait for this message to finish", true)
     .option("--no-wait", "Return after acceptance without waiting for completion");
 }
@@ -266,7 +270,7 @@ export async function runSendCommand(
     if (!recipient) throw new AgentMessageRejectedError(`Agent not found: ${agentIdArg}`);
     const messageId = randomUUID();
     attempted = { agentId: recipient.agent.id, messageId };
-    const activeTurnBehavior = options.interrupt ? "interrupt" : "queue";
+    const activeTurnBehavior = options.queue ? "queue" : "interrupt";
     const acknowledgement = await client.sendAgentMessage(recipient.agent.id, promptInput, {
       images,
       messageId,

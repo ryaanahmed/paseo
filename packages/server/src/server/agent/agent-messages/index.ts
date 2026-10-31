@@ -64,14 +64,28 @@ function unescapeXml(value: string): string | null {
   });
 }
 
-export function formatAgentMessage(message: AgentMessage): string {
+interface AgentMessageDeliveryOptions {
+  interrupting?: boolean;
+}
+
+const interruptionNotice =
+  "Paseo delivery note: This message may have interrupted your turn. The interruption itself is not a user request to cancel or abandon your previous task. Read this message, then resume unfinished work unless it explicitly redirects or cancels that work. Check the outcomes of interrupted commands before retrying; do not repeat an operation solely because your turn was interrupted.";
+
+export function formatAgentMessage(
+  message: AgentMessage,
+  options?: AgentMessageDeliveryOptions,
+): string {
   const { source } = message;
   const attributes = source
     ? `kind="${source.kind}" source-agent-id="${escapeXml(source.agentId)}"`
     : 'kind="user-message"';
   const title = source?.title ? ` source-agent-title="${escapeXml(source.title)}"` : "";
   const event = source?.kind === "agent-notification" ? ` event="${source.event}"` : "";
-  return `<paseo-system version="1" ${attributes} message-id="${escapeXml(message.id)}"${title}${event}>\n${escapeXml(message.text)}\n</paseo-system>`;
+  // Keep delivery guidance separate from the sender's body during timeline projection.
+  const interrupting = Boolean(source && options?.interrupting);
+  const delivery = interrupting ? ' delivery="interrupt"' : "";
+  const body = interrupting ? `${interruptionNotice}\n\n${message.text}` : message.text;
+  return `<paseo-system version="1" ${attributes} message-id="${escapeXml(message.id)}"${title}${event}${delivery}>\n${escapeXml(body)}\n</paseo-system>`;
 }
 
 export function parseAgentMessage(text: string): AgentMessage | null {
@@ -87,8 +101,13 @@ export function parseAgentMessage(text: string): AgentMessage | null {
   }
   if (attributes.get("version") !== "1") return null;
   const id = attributes.get("message-id");
-  const body = unescapeXml(envelope[2]);
+  let body = unescapeXml(envelope[2]);
   if (!id || body === null) return null;
+  if (attributes.get("delivery") === "interrupt") {
+    const prefix = `${interruptionNotice}\n\n`;
+    if (attributes.get("kind") === "user-message" || !body.startsWith(prefix)) return null;
+    body = body.slice(prefix.length);
+  }
   if (attributes.get("kind") === "user-message") {
     if (attributes.has("source-agent-id") || attributes.has("event")) return null;
     return { id, source: null, text: body };
@@ -113,6 +132,7 @@ export function prepareAgentMessage(
   prompt: AgentPromptInput,
   source?: AgentPromptSource,
   id?: string,
+  options?: AgentMessageDeliveryOptions,
 ): { prompt: AgentPromptInput; messageId?: string } {
   if (!source) {
     const submittedText =
@@ -134,7 +154,7 @@ export function prepareAgentMessage(
   const text = typeof prompt === "string" ? prompt : prompt.flatMap(renderMessageText).join("\n\n");
   // Render textual attachments before wrapping, so provider replay still contains one
   // complete envelope instead of an envelope followed by provider-rendered context.
-  const envelope = formatAgentMessage({ id: messageId, source: source ?? null, text });
+  const envelope = formatAgentMessage({ id: messageId, source: source ?? null, text }, options);
   return {
     messageId,
     prompt:

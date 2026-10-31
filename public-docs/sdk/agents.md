@@ -81,7 +81,7 @@ You can query the same record after reconnecting with `{ kind: "execution", exec
 
 The equivalent CLI query is `paseo agent execution <exact-agent-id> --client-message-id <id> --json`, or `--execution-id <id>`. It returns an array containing the metadata record, or an empty array when absent.
 
-On hosts advertising `agentMessageQueue`, use `activeTurnBehavior: "queue"` with a stable `messageId` to persist a message until the recipient is available. Agent-originated sends with `sourceAgentId` use this policy by default. An accepted queued send can have no execution record until it starts. Use `activeTurnBehavior: "interrupt"` only for deliberate cancellation.
+On hosts advertising `agentMessageQueue`, use `activeTurnBehavior: "queue"` with a stable `messageId` to persist a message until the recipient is available. Human and agent-originated sends interrupt by default. An accepted queued send can have no execution record until it starts. Use `activeTurnBehavior: "interrupt"` to select the default explicitly.
 
 To refuse delivery immediately when the recipient is busy, use `activeTurnBehavior: "reject"` and a stable `messageId`. The daemon refuses a busy or archived recipient; it does not steer, replace, queue or unarchive it. A lost acknowledgement remains an inspection problem. Query and non-interrupting send both require the host capability; an older host produces an explicit update error.
 

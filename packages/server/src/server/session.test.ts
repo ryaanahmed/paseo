@@ -5907,7 +5907,7 @@ test.each([
       agentStorage: { get: async () => stored, list: async () => [stored] },
       agentManager: {
         waitForAgentClose: async () => {},
-        resumeAgent,
+        resumeAgent: resumeAgentFromPersistence,
         streamAgent,
         replaceAgentRun,
         getAgent: () => {
@@ -5963,6 +5963,7 @@ test("agent-source websocket sends acknowledge queue acceptance without waiting 
     requestId: "queue-request",
     agentId: stored.id,
     sourceAgentId: "worker",
+    activeTurnBehavior: "queue",
     messageId: "worker-result",
     text: "Work completed",
   });
@@ -5983,4 +5984,44 @@ test("agent-source websocket sends acknowledge queue acceptance without waiting 
       error: null,
     },
   });
+});
+
+test("agent-source websocket sends interrupt by default without durable enqueue", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const stored = createStoredAgentRecord({ id: "agent-1", cwd: "/project", title: "Coordinator" });
+  const enqueueAgentMessage = vi.fn();
+  const replaceAgentRun = vi.fn(async function* () {});
+  const waitForAgentRunStart = vi.fn();
+  const session = createSessionForTest({
+    messages,
+    agentStorage: { get: async () => stored, list: async () => [stored] },
+    agentManager: {
+      waitForAgentClose: async () => {},
+      getAgent: () => ({
+        id: stored.id,
+        config: { title: "Coordinator" },
+        pendingPermissions: new Map(),
+      }),
+      hasInFlightRun: () => true,
+      tryRunOutOfBand: () => false,
+      enqueueAgentMessage,
+      replaceAgentRun,
+      waitForAgentRunStart,
+    },
+  });
+  await session.handleMessage({
+    type: "send_agent_message_request",
+    requestId: "urgent-request",
+    agentId: stored.id,
+    sourceAgentId: "worker",
+    messageId: "worker-urgent",
+    text: "Please handle this now",
+  });
+  expect(messages).toContainEqual({
+    type: "send_agent_message_response",
+    payload: { requestId: "urgent-request", agentId: stored.id, accepted: true, error: null },
+  });
+  expect(enqueueAgentMessage).not.toHaveBeenCalled();
+  expect(replaceAgentRun).toHaveBeenCalledOnce();
+  expect(waitForAgentRunStart).toHaveBeenCalledWith(stored.id, { signal: expect.any(AbortSignal) });
 });

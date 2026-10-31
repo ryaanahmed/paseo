@@ -950,7 +950,7 @@ export class AgentManager {
             error: error instanceof Error ? error.message : String(error),
           }),
         ].join("\n\n"),
-        activeTurnBehavior: "queue",
+        activeTurnBehavior: "interrupt",
         unarchive: false,
         logger: this.logger,
       });
@@ -961,7 +961,7 @@ export class AgentManager {
           agentId: message.agentId,
           clientMessageId: message.clientMessageId,
         },
-        "Failed to queue startup failure notification",
+        "Failed to deliver startup failure notification",
       );
     }
   }

@@ -973,8 +973,7 @@ function createAgentHandleFactory(
       },
       run: async (text, options) => {
         const { timeoutMs, ...sendOptions } = options ?? {};
-        const activeTurnBehavior =
-          sendOptions.activeTurnBehavior ?? (sendOptions.sourceAgentId ? "queue" : undefined);
+        const activeTurnBehavior = sendOptions.activeTurnBehavior ?? "interrupt";
         if (activeTurnBehavior === "queue") {
           throw new AgentMessageRejectedError(
             "Queued agent.run() is unsupported. Use agent.send() with a stable messageId, then agent.execution({ kind: 'submission', clientMessageId: messageId }) to observe that message.",
