@@ -22,9 +22,13 @@ const helper = path.join(root, "build/worker");
 await fs.copyFile(sourceHelper, helper);
 await fs.chmod(helper, 0o700);
 const stateDir = path.join(root, "runs/.locks/host-memory");
-await fs.mkdir(path.join(stateDir, "coverage"), { recursive: true });
+await fs.mkdir(path.join(stateDir, "coverage"), { recursive: true, mode: 0o700 });
 const boot = (await fs.readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
-const epoch = "a".repeat(32);
+const provisioning = JSON.parse(
+  (await execute(helper, ["host-memory", "provision", "--policy", "observe"], { cwd: root }))
+    .stdout,
+);
+const epoch = provisioning.state.consumerEpoch;
 const digest = "b".repeat(64);
 const registration = path.join(root, "owner.json");
 const statePath = path.join(stateDir, "state.json");
@@ -38,22 +42,6 @@ const json = async (file, value) =>
     ).replace(/"BIGINT:(\d+)"/g, "$1"),
     { mode: 0o600 },
   );
-await json(statePath, {
-  schema: 1,
-  policy: "observe",
-  linuxBootId: boot,
-  consumerEpoch: epoch,
-  epochHistory: [epoch],
-  lastBoottimeMs: 0,
-  generation: 0,
-  windowsBootId: "",
-  syncSequence: 0,
-  challenge: null,
-  snapshot: null,
-  lastAck: null,
-  receipts: {},
-  coverageManifestDigest: null,
-});
 Object.assign(process.env, {
   PASEO_PROVIDER_ADMISSION: "required",
   PASEO_PROVIDER_ADMISSION_HELPER: helper,
@@ -156,7 +144,7 @@ const daemon = await createPaseoDaemon(
 );
 let client;
 const plugin = new Orchestrator({ workspaceRoot: root });
-const checks = {};
+const checks = { provisioning };
 let sequence = 0,
   revision = 0,
   generation = 1;
@@ -220,6 +208,74 @@ try {
   await plugin.start();
   await plugin.ready(client);
   checks.daemon = { port, compiled: true, requiredCapability: true };
+  assert.equal(
+    (await command(["host-memory", "provision", "--policy", "enforce"], undefined, true)).code,
+    3,
+  );
+  const pluginHealth = async () =>
+    (
+      await fetch(`http://127.0.0.1:${plugin.server.address().port}/health`, {
+        headers: { Authorization: `Bearer ${plugin.token}` },
+      })
+    ).json();
+
+  // Observe keeps physical accounting active while the Windows producer is
+  // absent or stale. Its recorded reasons still describe the advisory decision.
+  const observeMissing = await query();
+  assert.equal(observeMissing.policy, "observe");
+  assert.equal(observeMissing.enforcementReady, false);
+  assert(observeMissing.reasonCodes.includes("authority_missing"));
+  const observePermit = async (id) =>
+    plugin.admitWorker(
+      plugin.register({
+        attemptId: id,
+        clientMessageId: id,
+        notifyOnCompletion: false,
+        cwd: root,
+        runDirectory: path.join(root, "runs", id),
+        title: `sa-worker:${id}`,
+      }),
+    );
+  assert(await observePermit("observe-missing"));
+  const observeChild = await bridge.spawnProviderProcess("/bin/cat", [], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  children.add(observeChild);
+  observeChild.stderr.on("data", (chunk) => process.stderr.write(chunk));
+  const echoed = once(observeChild.stdout, "data");
+  observeChild.stdin.write("observe scope\n");
+  await echoed;
+  assert.equal((await reservations()).length, 1);
+  const observeReservation = JSON.parse(
+    await fs.readFile(
+      path.join(root, "runs/.locks/provider-reservations", (await reservations())[0]),
+    ),
+  );
+  assert.equal(observeReservation.bytes, 1048576);
+  const observeHeld = (await snapshot(["d".repeat(32)])).state;
+  assert.equal(observeHeld.barrier, "disabled");
+  assert.equal(observeHeld.enforcementReady, false);
+  assert(observeHeld.reasonCodes.includes("compile_jobs_held"));
+  assert(await observePermit("observe-held"));
+  await new Promise((resolve) => setTimeout(resolve, 31000));
+  const observeStale = await query();
+  assert.equal(observeStale.barrier, "disabled");
+  assert.equal(observeStale.enforcementReady, false);
+  assert(observeStale.reasonCodes.includes("authority_expired"));
+  assert(await observePermit("observe-stale"));
+  const observeClosed = once(observeChild, "close");
+  observeChild.stdin.end();
+  assert.equal((await observeClosed)[0], 0);
+  children.delete(observeChild);
+  assert.equal((await reservations()).length, 0);
+  checks.observeMode = {
+    missing: observeMissing,
+    held: observeHeld,
+    stale: observeStale,
+    pluginAdmittedAllThree: true,
+    physicalChargeBytes: observeReservation.bytes,
+    releasedAfterClose: true,
+  };
 
   // Only the attestation fixture is injected. All snapshot/grant/owner checks
   // run through the compiled helper. This is not installed coverage evidence.
@@ -246,7 +302,24 @@ try {
   });
   const ledger = JSON.parse(await fs.readFile(statePath));
   await json(statePath, { ...ledger, policy: "enforce", coverageManifestDigest: digest });
-  assert.equal((await snapshot([])).state.barrier, "clear");
+  const beforeHandshake = {
+    daemonRequiredHostAdmission: client.agents.supportsRequiredHostAdmission(),
+    plugin: await pluginHealth(),
+    host: await query(),
+  };
+  const firstEnforcedApply = await snapshot([]);
+  assert.equal(firstEnforcedApply.state.barrier, "clear");
+  assert.equal(firstEnforcedApply.state.enforcementReady, true);
+  const afterHandshake = {
+    daemonRequiredHostAdmission: client.agents.supportsRequiredHostAdmission(),
+    plugin: await pluginHealth(),
+    host: await query(),
+    ack: firstEnforcedApply.ack,
+  };
+  assert.equal(beforeHandshake.host.enforcementReady, false);
+  assert.equal(afterHandshake.ack.consumerEpoch, afterHandshake.host.consumerEpoch);
+  assert.equal(afterHandshake.ack.compileJobsDigest, afterHandshake.host.compileJobsDigest);
+  checks.enforceHandshake = { before: beforeHandshake, after: afterHandshake };
   const admitted = plugin.register({
     attemptId: "clear-admission",
     clientMessageId: "clear-admission",
