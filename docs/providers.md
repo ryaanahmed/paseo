@@ -138,6 +138,13 @@ come from `PASEO_PROVIDER_ADMISSION_REGISTRATION`, `PASEO_PROVIDER_ADMISSION_EPO
 `PASEO_PROVIDER_ADMISSION_MANIFEST`. They belong to attended host configuration; a plugin
 cannot substitute an optional lifecycle hook for this gate.
 
+Leaving `PASEO_PROVIDER_ADMISSION` unset preserves normal provider launch behavior
+and starts no admission helper. Hosts without this coordinator, including the
+Mac, need no new setting. `requiredHostAdmission` is false in that mode. This
+capability describes the required physical gate; the helper's separate
+`host-memory query` reports Windows-barrier `enforcementReady`, which also needs
+enforce policy, current coverage and a fresh producer snapshot.
+
 The server advertises `features.requiredHostAdmission` only while required mode
 has a live registration owner. The SDK exposes it through
 `agents.supportsRequiredHostAdmission()`. Matching orchestration plugins must
