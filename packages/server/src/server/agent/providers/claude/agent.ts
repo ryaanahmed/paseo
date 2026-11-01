@@ -1,3 +1,4 @@
+import { parseAgentMessage } from "../../agent-messages/index.js";
 import { validateProviderOptions } from "../../provider-options.js";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -1433,6 +1434,36 @@ class TimelineAssembler {
   }
 }
 
+const CLAUDE_NON_USER_MESSAGE_PREFIX = "[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n";
+
+function normalizePaseoPeerContent(content: unknown, peerText: string | null): unknown {
+  if (!peerText) return content;
+  if (typeof content === "string") return peerText;
+  if (!Array.isArray(content)) return content;
+  const first = toObjectRecord(content[0]);
+  if (first?.type !== "text" || typeof first.text !== "string") return content;
+  if (!first.text.startsWith(CLAUDE_NON_USER_MESSAGE_PREFIX)) return content;
+  // Keep images and tool results alongside the normalized text.
+  return [
+    { ...first, text: first.text.slice(CLAUDE_NON_USER_MESSAGE_PREFIX.length) },
+    ...content.slice(1),
+  ];
+}
+
+function readPaseoPeerText(entry: unknown): string | null {
+  const candidate = toObjectRecord(entry);
+  if (candidate?.type !== "user") return null;
+  const message = toObjectRecord(candidate?.message);
+  let text = extractUserMessageText(message?.content);
+  if (!text) return null;
+  // Claude persists its non-user label inside synthetic message content. Strip
+  // it only at this provider boundary and only retain a valid peer envelope.
+  if (isSyntheticUserEntry(entry) && text.startsWith(CLAUDE_NON_USER_MESSAGE_PREFIX)) {
+    text = text.slice(CLAUDE_NON_USER_MESSAGE_PREFIX.length);
+  }
+  return parseAgentMessage(text)?.source ? text : null;
+}
+
 function isSyntheticUserEntry(entry: unknown): boolean {
   const candidate = toObjectRecord(entry);
   if (!candidate) {
@@ -1456,7 +1487,7 @@ function isToolResultUserEntry(entry: unknown): boolean {
 }
 
 function isSyntheticHistoryUserEntry(entry: Record<string, unknown>): boolean {
-  return isSyntheticUserEntry(entry) && !isToolResultUserEntry(entry);
+  return isSyntheticUserEntry(entry) && !isToolResultUserEntry(entry) && !readPaseoPeerText(entry);
 }
 
 function firstTrimmedString(sources: readonly unknown[]): string | null {
@@ -3597,6 +3628,20 @@ class ClaudeAgentSession implements AgentSession {
 
     const messageId = randomUUID();
     this.rememberUserMessageId(messageId);
+    const text = extractUserMessageText(content);
+    const source = text ? parseAgentMessage(text)?.source : null;
+    // Peer origin alone is ignored by some Claude Code versions. Synthetic input
+    // keeps their rendered reminder from attributing peer work to the human.
+    const peer = source
+      ? {
+          isSynthetic: true,
+          origin: {
+            kind: "peer" as const,
+            from: source.agentId,
+            ...(source.title ? { name: source.title } : {}),
+          },
+        }
+      : {};
 
     return {
       type: "user",
@@ -3606,6 +3651,7 @@ class ClaudeAgentSession implements AgentSession {
       },
       parent_tool_use_id: null,
       uuid: messageId,
+      ...peer,
       session_id: this.claudeSessionId ?? "",
     };
   }
@@ -4591,7 +4637,8 @@ class ClaudeAgentSession implements AgentSession {
     message: Extract<SDKMessage, { type: "user" }>,
     events: AgentStreamEvent[],
   ): void {
-    if (isSyntheticUserEntry(message)) {
+    const peerText = readPaseoPeerText(message);
+    if (isSyntheticUserEntry(message) && !peerText) {
       return;
     }
     if (this.compacting) {
@@ -4605,7 +4652,7 @@ class ClaudeAgentSession implements AgentSession {
     }
     this.rememberUserMessageId(messageId);
     this.rememberEmittedUserMessageId(messageId);
-    const content = message.message?.content;
+    const content = normalizePaseoPeerContent(message.message?.content, peerText);
     const taskNotificationItem = mapTaskNotificationUserContentToToolCall({
       content,
       messageId,
@@ -6299,7 +6346,7 @@ function convertClaudeHistoryEntryPreamble(
     return { shortCircuit: [] };
   }
 
-  const content = message.content;
+  const content = normalizePaseoPeerContent(message.content, readPaseoPeerText(entry));
   if (
     (entry.type === "user" || entry.type === "assistant") &&
     isClaudeTranscriptNoiseContent(content)

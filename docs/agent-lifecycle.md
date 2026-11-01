@@ -79,13 +79,28 @@ Accepting new work after an ambiguous interruption would create a split-brain se
 
 ## Agent message delivery
 
-Agent-to-agent sends and finish notifications interrupt the recipient's current
-turn by default so coordination reaches active agents. Queueing is opt-in through
-CLI `--queue`, MCP `interrupt: false`, or SDK `activeTurnBehavior: "queue"`.
-Interrupting agent messages carry a delivery note: interruption is not a user
-cancellation of the previous task. The recipient handles the message and resumes
-unfinished work unless redirected, checking interrupted command outcomes before
-retrying. The note is separate from sender text in the projected timeline.
+Agent-to-agent sends and finish notifications steer the recipient's active turn
+by default. Human prompts still interrupt by default. CLI `--steer`, `--interrupt`,
+and `--queue` select an explicit policy; MCP `interrupt: true` interrupts and
+`interrupt: false` queues. SDK callers use `activeTurnBehavior`.
+
+Claude receives peer input with synthetic-message and peer-origin metadata.
+Peer-origin metadata alone still produces a human-attributed reminder in Claude
+Code 2.1.296; synthetic input supplies its explicit non-user framing. The Paseo
+envelope carries the sender identity for both Claude and Codex. Codex's steering
+API has no native peer-origin field.
+
+A provider that definitively cannot steer falls back to interruption while the
+admission still owns the original turn. The delivery note names tools that were
+running when interruption was requested, explains that harness cancellation text
+came from automated delivery, and tells the recipient to inspect command effects
+before retrying. The note is separate from sender text in the projected timeline.
+
+Accepted steering has no automatic timeout-and-replay. Codex acknowledges and
+echoes input before the model consumes it, and accepted steering has no verified
+withdrawal operation. Resending on a timer could duplicate instructions or their
+effects. A tool or provider that stalls can therefore delay an accepted message;
+use explicit interruption when that trade-off is intended.
 
 Queue acceptance and execution are separate: callers must keep the message ID
 and observe its exact execution, rather than treating the recipient's next idle

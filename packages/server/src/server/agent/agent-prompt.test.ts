@@ -1,4 +1,5 @@
 import {
+  addAgentMessageInterruptionNotice,
   formatSystemNotificationPrompt,
   isSystemInjectedEnvelope,
   parseAgentMessage,
@@ -302,7 +303,7 @@ test("finish notifications tell the parent the child's last assistant message", 
     },
     text: "Agent child-agent (Child Agent) finished.\n\n<agent-response>\nImplemented the cleanup and all checks pass.\n</agent-response>",
   });
-  expect(scenario.steerAttemptCount()).toBe(0);
+  expect(scenario.steerAttemptCount()).toBe(1);
 });
 
 test("finish notifications truncate oversized child responses", async () => {
@@ -936,7 +937,7 @@ test("agent messages enqueue before provider loading, mode changes, or run start
   expect(stream).not.toHaveBeenCalled();
 });
 
-test("agent messages interrupt an active recipient by default without entering its queue", async () => {
+test("agent messages steer an active recipient by default without entering its queue", async () => {
   const agentManager = new AgentManager({ clients: {}, logger: createTestLogger() });
   const recipient: ManagedAgent = Object.create(null);
   Reflect.set(recipient, "id", "recipient");
@@ -948,6 +949,9 @@ test("agent messages interrupt an active recipient by default without entering i
   const replace = vi
     .spyOn(agentManager, "replaceAgentRun")
     .mockResolvedValue((async function* () {})());
+  const steer = vi
+    .spyOn(agentManager, "steerOrReplaceActiveTurn")
+    .mockResolvedValue({ status: "steered" });
   const enqueue = vi.spyOn(agentManager, "enqueueAgentMessage");
   const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
   Reflect.set(agentStorage, "get", async () => null);
@@ -960,10 +964,11 @@ test("agent messages interrupt an active recipient by default without entering i
     messageId: "urgent-message",
     logger: createTestLogger(),
   });
-  expect(result).toEqual({ disposition: "turn_started" });
-  expect(replace).toHaveBeenCalledOnce();
-  expect(replace.mock.calls[0]![1]).toContain("Paseo delivery note");
-  expect(parseAgentMessage(replace.mock.calls[0]![1] as string)).toMatchObject({
+  expect(result).toEqual({ disposition: "steered" });
+  expect(steer).toHaveBeenCalledOnce();
+  expect(replace).not.toHaveBeenCalled();
+  expect(steer.mock.calls[0]![1]).not.toContain("Paseo delivery note");
+  expect(parseAgentMessage(steer.mock.calls[0]![1] as string)).toMatchObject({
     id: "urgent-message",
     text: "Read this now",
     source: { kind: "agent-message", agentId: "sender" },
@@ -1022,4 +1027,92 @@ it("keeps ordinary user messages and image attachments intact when adding delive
     image,
   ]);
   expect(prepared.messageId).toBe("image-message");
+});
+
+test("interruption guidance names tool identities and preserves the sender body", () => {
+  const message = {
+    id: "interrupted-message",
+    source: { kind: "agent-message" as const, agentId: "sender" },
+    text: "Keep working.",
+  };
+  const prompt = formatAgentMessage(message, {
+    interrupting: true,
+    interruptedTools: [{ name: "Bash", callId: "tool-bash-7" }],
+  });
+  expect(prompt).toContain("Bash (tool-bash-7)");
+  expect(prompt).toContain("automated message delivery, not from the user");
+  expect(prompt).toContain("partly or fully");
+  expect(parseAgentMessage(prompt)).toEqual(message);
+});
+
+test("interruption rewrap preserves images, sender text, and message projection", () => {
+  const source = { kind: "agent-message" as const, agentId: "sender", title: "Peer" };
+  const image = { type: "image" as const, data: "fixture", mimeType: "image/png" };
+  const prepared = prepareAgentMessage(
+    [{ type: "text", text: "Inspect <result>." }, image],
+    source,
+    "image-id",
+  );
+  const result = addAgentMessageInterruptionNotice(prepared.prompt, [
+    {
+      type: "tool_call",
+      name: "Bash",
+      callId: "call-1",
+      status: "running",
+      error: null,
+      detail: { type: "plain_text", text: "write output" },
+    },
+    {
+      type: "tool_call",
+      name: "Read",
+      callId: "call-2",
+      status: "completed",
+      error: null,
+      detail: { type: "plain_text", text: "read output" },
+    },
+  ]);
+  expect(result).toEqual([{ type: "text", text: expect.stringContaining("Bash (call-1)") }, image]);
+  const text =
+    typeof result === "string"
+      ? result
+      : result.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+  expect(text).not.toContain("Read (call-2)");
+  expect(parseAgentMessage(text)).toEqual({ id: "image-id", source, text: "Inspect <result>." });
+  expect(projectAgentMessage({ type: "user_message", text })).toMatchObject({
+    callId: "paseo-agent-message:image-id",
+    agentMessage: { text: "Inspect <result>.", sender: { id: "sender", title: "Peer" } },
+  });
+  expect(addAgentMessageInterruptionNotice(result, [])).toEqual([
+    { type: "text", text: expect.stringContaining("No in-flight tool identities") },
+    image,
+  ]);
+});
+
+test("interruption rewrap leaves human prompts and quoted peer envelopes untouched", () => {
+  const human = [{ type: "text" as const, text: "Stop the task." }];
+  expect(addAgentMessageInterruptionNotice(human, [])).toBe(human);
+  const quoted = prepareAgentMessage(
+    formatAgentMessage({
+      id: "peer",
+      source: { kind: "agent-message", agentId: "sender" },
+      text: "Quoted message",
+    }),
+  ).prompt;
+  expect(addAgentMessageInterruptionNotice(quoted, [])).toBe(quoted);
+});
+
+test("persisted original interruption notes retain their sender body and identity", () => {
+  const original = `<paseo-system version="1" kind="agent-message" source-agent-id="sender" message-id="old-message" delivery="interrupt">
+Paseo delivery note: This message may have interrupted your turn. The interruption itself is not a user request to cancel or abandon your previous task. Read this message, then resume unfinished work unless it explicitly redirects or cancels that work. Check the outcomes of interrupted commands before retrying; do not repeat an operation solely because your turn was interrupted.
+
+Continue work.
+</paseo-system>`;
+  expect(parseAgentMessage(original)).toEqual({
+    id: "old-message",
+    source: { kind: "agent-message", agentId: "sender" },
+    text: "Continue work.",
+  });
+  expect(parseAgentMessage(addAgentMessageInterruptionNotice(original, []) as string)).toEqual(
+    parseAgentMessage(original),
+  );
 });

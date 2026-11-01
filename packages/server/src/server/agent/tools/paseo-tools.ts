@@ -1140,7 +1140,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       .boolean()
       .optional()
       .describe(
-        "Interrupt the recipient's current turn (default true). Set false to queue until the recipient is available.",
+        "Set true to interrupt the recipient's current turn or false to queue. When omitted, agent messages steer the active turn and human messages interrupt.",
       ),
     sessionMode: z.string().optional().describe("Optional mode to set before running the prompt."),
   };
@@ -1894,11 +1894,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     {
       title: "Send agent prompt",
       description:
-        "Send a task and return after acceptance. Messages interrupt the active turn by default; set interrupt to false to queue. Calling agents receive finish notifications by default.",
+        "Send a task and return after acceptance. Agent messages steer the active turn by default; human messages interrupt. Set interrupt to true to interrupt or false to queue. Calling agents receive finish notifications by default.",
       inputSchema: sendAgentPromptInputSchema,
       outputSchema: {
         success: z.boolean(),
-        disposition: z.enum(["turn_started", "out_of_band", "queued"]).optional(),
+        disposition: z.enum(["turn_started", "out_of_band", "steered", "queued"]).optional(),
         status: AgentStatusEnum,
         guidance: z.string().optional(),
       },
@@ -1907,7 +1907,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       agentId,
       prompt,
       sessionMode,
-      interrupt = true,
+      interrupt,
       notifyOnFinish = Boolean(callerAgentId),
     }) => {
       let stopNotification: (() => void) | undefined;
@@ -1925,6 +1925,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         });
       }
 
+      let activeTurnBehavior: "interrupt" | "queue" | undefined;
+      if (interrupt !== undefined) activeTurnBehavior = interrupt ? "interrupt" : "queue";
       const notifying = Boolean(callerAgentId && notifyOnFinish);
       const { disposition } = await sendPromptToAgent({
         agentManager,
@@ -1933,7 +1935,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         prompt,
         source: callerAgentId ? { kind: "agent-message", agentId: callerAgentId } : undefined,
         sessionMode,
-        activeTurnBehavior: interrupt ? "interrupt" : "queue",
+        activeTurnBehavior,
         queuedFinishNotification: notifying && callerAgentId ? { callerAgentId } : undefined,
         onDispatch: armFinishNotification,
         logger: childLogger,

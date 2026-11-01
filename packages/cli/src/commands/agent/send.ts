@@ -1,6 +1,7 @@
 import { AgentMessageRejectedError } from "@getpaseo/client/internal/daemon-client";
 import { randomUUID } from "node:crypto";
 import type { AgentExecution } from "@getpaseo/protocol/agent-execution";
+import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { type Command, Option } from "commander";
 import { collectMultiple } from "../../utils/command-options.js";
 import { connectToDaemon } from "../../utils/client.js";
@@ -36,23 +37,45 @@ export const agentSendSchema: OutputSchema<AgentSendResult> = {
 export interface AgentSendOptions extends CommandOptions {
   wait?: boolean;
   interrupt?: boolean;
+  steer?: boolean;
   queue?: boolean;
   image?: string[];
   prompt?: string;
   promptFile?: string;
 }
 
+function resolveDeliveryBehavior(
+  options: AgentSendOptions,
+  sourceAgentId: string | undefined,
+): ActiveTurnBehavior {
+  if (options.queue) return "queue";
+  if (options.interrupt) return "interrupt";
+  if (options.steer) return "steer";
+  return sourceAgentId ? "steer" : "interrupt";
+}
+
 export function addSendOptions(cmd: Command): Command {
   return cmd
-    .description("Send a message/task to an existing agent (interrupts by default)")
+    .description(
+      "Send a message/task to an existing agent (agent messages steer; human messages interrupt)",
+    )
     .argument("<id>", "Agent ID (or prefix)")
     .argument("[prompt]", "The message to send")
     .option("--prompt <text>", "Provide the message inline as a flag")
     .option("--prompt-file <path>", "Read the message from a UTF-8 text file")
     .option("--image <path>", "Attach image(s) to the message", collectMultiple, [])
-    .option("--interrupt", "Interrupt the active turn (default)")
+    .option("--interrupt", "Interrupt the active turn (default for human messages)")
     .addOption(
-      new Option("--queue", "Queue until the recipient is available").conflicts("interrupt"),
+      new Option("--steer", "Steer the active turn (default for agent messages)").conflicts([
+        "interrupt",
+        "queue",
+      ]),
+    )
+    .addOption(
+      new Option("--queue", "Queue until the recipient is available").conflicts([
+        "interrupt",
+        "steer",
+      ]),
     )
     .option("--wait", "Wait for this message to finish", true)
     .option("--no-wait", "Return after acceptance without waiting for completion");
@@ -157,7 +180,11 @@ type SendWaitState = Awaited<
   ReturnType<Awaited<ReturnType<typeof connectToDaemon>>["waitForFinish"]>
 >;
 
-function buildSendResult(agentIdArg: string, state: SendWaitState): AgentSendResult {
+function buildSendResult(
+  agentIdArg: string,
+  state: SendWaitState,
+  activeTurnBehavior: ActiveTurnBehavior,
+): AgentSendResult {
   const agentId = state.final?.id ?? agentIdArg;
   if (state.status === "timeout") {
     return { agentId, status: "timeout", message: "Timed out waiting for agent to finish" };
@@ -170,6 +197,14 @@ function buildSendResult(agentIdArg: string, state: SendWaitState): AgentSendRes
       agentId,
       status: "error",
       message: state.error ?? "Agent finished with error",
+    };
+  }
+  if (activeTurnBehavior === "steer") {
+    return {
+      agentId,
+      status: "sent",
+      message:
+        "Message accepted; recipient is idle. Completion of this steered message was not independently verified.",
     };
   }
   return { agentId, status: "completed", message: "Agent completed processing the message" };
@@ -270,12 +305,13 @@ export async function runSendCommand(
     if (!recipient) throw new AgentMessageRejectedError(`Agent not found: ${agentIdArg}`);
     const messageId = randomUUID();
     attempted = { agentId: recipient.agent.id, messageId };
-    const activeTurnBehavior = options.queue ? "queue" : "interrupt";
+    const sourceAgentId = process.env.PASEO_AGENT_ID?.trim() || undefined;
+    const activeTurnBehavior = resolveDeliveryBehavior(options, sourceAgentId);
     const acknowledgement = await client.sendAgentMessage(recipient.agent.id, promptInput, {
       images,
       messageId,
       activeTurnBehavior,
-      sourceAgentId: process.env.PASEO_AGENT_ID?.trim() || undefined,
+      sourceAgentId,
     });
     accepted = { agentId: acknowledgement.agentId, messageId };
 
@@ -293,7 +329,10 @@ export async function runSendCommand(
       result = await waitForQueuedMessage({ client, agentId: acknowledgement.agentId, messageId });
     } else {
       const state = await client.waitForFinish(acknowledgement.agentId, 600000);
-      result = { ...buildSendResult(acknowledgement.agentId, state), messageId };
+      result = {
+        ...buildSendResult(acknowledgement.agentId, state, activeTurnBehavior),
+        messageId,
+      };
     }
     return {
       type: "single",

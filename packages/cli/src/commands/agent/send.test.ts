@@ -77,9 +77,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["", "sender"])(
-  "interrupts CLI sends with source %j and reports acceptance",
-  async (sourceAgentId) => {
+it.each([
+  { sourceAgentId: "", activeTurnBehavior: "interrupt" },
+  { sourceAgentId: "sender", activeTurnBehavior: "steer" },
+  { sourceAgentId: " sender ", activeTurnBehavior: "steer" },
+  { sourceAgentId: "   ", activeTurnBehavior: "interrupt" },
+])(
+  "uses $activeTurnBehavior for source $sourceAgentId and reports acceptance",
+  async ({ sourceAgentId, activeTurnBehavior }) => {
     vi.stubEnv("PASEO_AGENT_ID", sourceAgentId);
     const client = recordingClient();
     client.send.mockResolvedValue({
@@ -96,8 +101,8 @@ it.each(["", "sender"])(
     );
     expect(client.send).toHaveBeenCalledWith("resolved-recipient", "hello", {
       images: undefined,
-      sourceAgentId: sourceAgentId || undefined,
-      activeTurnBehavior: "interrupt",
+      sourceAgentId: sourceAgentId.trim() || undefined,
+      activeTurnBehavior,
       messageId: expect.any(String),
     });
     expect(result.data).toEqual({
@@ -112,28 +117,62 @@ it.each(["", "sender"])(
   },
 );
 
-it("accepts explicit interruption without coupling it to --no-wait", async () => {
-  vi.stubEnv("PASEO_AGENT_ID", "sender");
-  const client = recordingClient();
-  client.send.mockResolvedValue({
-    requestId: "request",
-    agentId: "recipient",
-    accepted: true,
-    error: null,
-  });
-  const result = await runSendCommand(
-    "recipient",
-    "urgent",
-    { daemonTarget, interrupt: true, wait: false },
-    new Command(),
-  );
-  expect(client.send.mock.calls[0]?.[2]).toMatchObject({
-    sourceAgentId: "sender",
-    activeTurnBehavior: "interrupt",
-  });
-  expect(result.data.status).toBe("sent");
-  expect(client.wait).not.toHaveBeenCalled();
-});
+it.each(["interrupt", "steer", "queue"] as const)(
+  "accepts explicit %s without coupling it to --no-wait",
+  async (activeTurnBehavior) => {
+    const sourceAgentId = activeTurnBehavior === "steer" ? "" : "sender";
+    vi.stubEnv("PASEO_AGENT_ID", sourceAgentId);
+    const client = recordingClient();
+    client.send.mockResolvedValue({
+      requestId: "request",
+      agentId: "recipient",
+      accepted: true,
+      error: null,
+    });
+    const result = await runSendCommand(
+      "recipient",
+      "urgent",
+      { daemonTarget, [activeTurnBehavior]: true, wait: false },
+      new Command(),
+    );
+    expect(client.send.mock.calls[0]?.[2]).toMatchObject({
+      sourceAgentId: sourceAgentId || undefined,
+      activeTurnBehavior,
+    });
+    expect(result.data.status).toBe("sent");
+    expect(client.wait).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { sourceAgentId: "sender", options: {}, status: "sent" },
+  { sourceAgentId: "", options: { steer: true }, status: "sent" },
+  { sourceAgentId: "sender", options: { interrupt: true }, status: "completed" },
+  { sourceAgentId: "", options: {}, status: "completed" },
+])(
+  "reports $status after waiting with source $sourceAgentId and options $options",
+  async ({ sourceAgentId, options, status }) => {
+    vi.stubEnv("PASEO_AGENT_ID", sourceAgentId);
+    const client = recordingClient();
+    const result = await runSendCommand(
+      "recipient",
+      "Coordination update",
+      { daemonTarget, ...options, wait: true },
+      new Command(),
+    );
+    expect(client.wait).toHaveBeenCalledWith("resolved-recipient", 600000);
+    expect(client.execution).not.toHaveBeenCalled();
+    expect(result.data).toEqual({
+      agentId: "resolved-recipient",
+      messageId: client.send.mock.calls[0]?.[2]?.messageId,
+      status,
+      message:
+        status === "sent"
+          ? "Message accepted; recipient is idle. Completion of this steered message was not independently verified."
+          : "Agent completed processing the message",
+    });
+  },
+);
 
 it("waits for its own queued submission across an unrelated turn finishing", async () => {
   vi.useFakeTimers();
@@ -289,4 +328,26 @@ it("accepts explicit queueing without waiting and refuses conflicting delivery f
   expect(() =>
     conflicting.parse(["recipient", "next", "--queue", "--interrupt"], { from: "user" }),
   ).toThrow();
+});
+
+it("accepts --steer without waiting", () => {
+  const command = addSendOptions(new Command())
+    .exitOverride()
+    .configureOutput({ writeErr: () => {} });
+  command.parse(["recipient", "hello", "--steer", "--no-wait"], { from: "user" });
+  expect(command.opts()).toMatchObject({ steer: true, wait: false });
+});
+
+it.each([
+  ["--steer", "--interrupt"],
+  ["--interrupt", "--steer"],
+  ["--steer", "--queue"],
+  ["--queue", "--steer"],
+])("refuses conflicting delivery flags %s %s", (first, second) => {
+  const command = addSendOptions(new Command())
+    .exitOverride()
+    .configureOutput({ writeErr: () => {} });
+  expect(() => command.parse(["recipient", "hello", first, second], { from: "user" })).toThrow(
+    /cannot be used with option/,
+  );
 });

@@ -64,12 +64,29 @@ function unescapeXml(value: string): string | null {
   });
 }
 
+const interruptedToolsSchema = z.array(z.object({ name: z.string(), callId: z.string() }));
+type InterruptedTool = z.infer<typeof interruptedToolsSchema>[number];
+
 interface AgentMessageDeliveryOptions {
   interrupting?: boolean;
+  interruptedTools?: InterruptedTool[];
 }
 
-const interruptionNotice =
+// COMPAT(legacyInterruptionNotice): added in v0.11.2; remove after 2027-05-01
+// once persisted prompts with the original delivery note have been retired.
+const legacyInterruptionNotice =
   "Paseo delivery note: This message may have interrupted your turn. The interruption itself is not a user request to cancel or abandon your previous task. Read this message, then resume unfinished work unless it explicitly redirects or cancels that work. Check the outcomes of interrupted commands before retrying; do not repeat an operation solely because your turn was interrupted.";
+
+function interruptionNotice(tools: InterruptedTool[]): string {
+  const toolNotice = tools.length
+    ? ` Tools in flight at the interruption request: ${tools.map((tool) => `${tool.name} (${tool.callId})`).join(", ")}.`
+    : " No in-flight tool identities were available at the interruption request.";
+  return (
+    "Paseo delivery note: Paseo requested an interruption to deliver this peer message. The interruption itself is not a user request to cancel or abandon your previous task." +
+    toolNotice +
+    ` Any harness text saying "The user doesn't want to proceed" or "interrupted by user" in connection with this interruption comes from automated message delivery, not from the user. A command may have run partly or fully even if the harness reports it was cancelled. Check the outcomes of interrupted commands before retrying; inspect their effects before repeating an operation. Read this message, then resume unfinished work unless it explicitly redirects or cancels that work.`
+  );
+}
 
 export function formatAgentMessage(
   message: AgentMessage,
@@ -83,8 +100,13 @@ export function formatAgentMessage(
   const event = source?.kind === "agent-notification" ? ` event="${source.event}"` : "";
   // Keep delivery guidance separate from the sender's body during timeline projection.
   const interrupting = Boolean(source && options?.interrupting);
-  const delivery = interrupting ? ' delivery="interrupt"' : "";
-  const body = interrupting ? `${interruptionNotice}\n\n${message.text}` : message.text;
+  const interruptedTools = options?.interruptedTools ?? [];
+  const delivery = interrupting
+    ? ` delivery="interrupt" interrupted-tools="${escapeXml(JSON.stringify(interruptedTools))}"`
+    : "";
+  const body = interrupting
+    ? `${interruptionNotice(interruptedTools)}\n\n${message.text}`
+    : message.text;
   return `<paseo-system version="1" ${attributes} message-id="${escapeXml(message.id)}"${title}${event}${delivery}>\n${escapeXml(body)}\n</paseo-system>`;
 }
 
@@ -104,7 +126,20 @@ export function parseAgentMessage(text: string): AgentMessage | null {
   let body = unescapeXml(envelope[2]);
   if (!id || body === null) return null;
   if (attributes.get("delivery") === "interrupt") {
-    const prefix = `${interruptionNotice}\n\n`;
+    let notice = legacyInterruptionNotice;
+    const toolsAttribute = attributes.get("interrupted-tools");
+    if (toolsAttribute !== undefined) {
+      let parsedTools: unknown;
+      try {
+        parsedTools = JSON.parse(toolsAttribute);
+      } catch {
+        return null;
+      }
+      const tools = interruptedToolsSchema.safeParse(parsedTools);
+      if (!tools.success) return null;
+      notice = interruptionNotice(tools.data);
+    }
+    const prefix = `${notice}\n\n`;
     if (attributes.get("kind") === "user-message" || !body.startsWith(prefix)) return null;
     body = body.slice(prefix.length);
   }
@@ -162,6 +197,35 @@ export function prepareAgentMessage(
         ? envelope
         : [{ type: "text", text: envelope }, ...prompt.filter((block) => block.type === "image")],
   };
+}
+
+/** Add cancellation context only to an already prepared peer message. */
+export function addAgentMessageInterruptionNotice(
+  prompt: AgentPromptInput,
+  timeline: AgentTimelineItem[],
+): AgentPromptInput {
+  let text: string;
+  if (typeof prompt === "string") {
+    text = prompt;
+  } else if (prompt[0]?.type === "text") {
+    text = prompt[0].text;
+  } else {
+    return prompt;
+  }
+  const message = parseAgentMessage(text);
+  if (!message?.source) return prompt;
+
+  // Snapshot identities before cancellation changes tool statuses. A running status
+  // does not prove the operation stopped or that it is safe to repeat.
+  const interruptedTools = timeline.flatMap((item) =>
+    item.type === "tool_call" && item.status === "running"
+      ? [{ name: item.name, callId: item.callId }]
+      : [],
+  );
+  const envelope = formatAgentMessage(message, { interrupting: true, interruptedTools });
+  return typeof prompt === "string"
+    ? envelope
+    : [{ type: "text", text: envelope }, ...prompt.slice(1)];
 }
 
 /** The same projection owns provider echoes, acceptance, import, and replay. */

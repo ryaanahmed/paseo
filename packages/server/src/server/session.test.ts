@@ -5986,12 +5986,13 @@ test("agent-source websocket sends acknowledge queue acceptance without waiting 
   });
 });
 
-test("agent-source websocket sends interrupt by default without durable enqueue", async () => {
+test("agent-source websocket sends steer by default without durable enqueue", async () => {
   const messages: SessionOutboundMessage[] = [];
   const stored = createStoredAgentRecord({ id: "agent-1", cwd: "/project", title: "Coordinator" });
   const enqueueAgentMessage = vi.fn();
   const replaceAgentRun = vi.fn(async function* () {});
   const waitForAgentRunStart = vi.fn();
+  const steeredAgents: string[] = [];
   const session = createSessionForTest({
     messages,
     agentStorage: { get: async () => stored, list: async () => [stored] },
@@ -6006,6 +6007,10 @@ test("agent-source websocket sends interrupt by default without durable enqueue"
       tryRunOutOfBand: () => false,
       enqueueAgentMessage,
       replaceAgentRun,
+      steerOrReplaceActiveTurn: async (agentId: string) => {
+        steeredAgents.push(agentId);
+        return { status: "steered" };
+      },
       waitForAgentRunStart,
     },
   });
@@ -6022,6 +6027,7 @@ test("agent-source websocket sends interrupt by default without durable enqueue"
     payload: { requestId: "urgent-request", agentId: stored.id, accepted: true, error: null },
   });
   expect(enqueueAgentMessage).not.toHaveBeenCalled();
-  expect(replaceAgentRun).toHaveBeenCalledOnce();
-  expect(waitForAgentRunStart).toHaveBeenCalledWith(stored.id, { signal: expect.any(AbortSignal) });
+  expect(steeredAgents).toEqual([stored.id]);
+  expect(replaceAgentRun).not.toHaveBeenCalled();
+  expect(waitForAgentRunStart).not.toHaveBeenCalled();
 });

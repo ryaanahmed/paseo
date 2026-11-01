@@ -433,7 +433,7 @@ export interface DaemonClientTrace {
 export interface SendMessageOptions {
   sourceAgentId?: string;
   messageId?: string;
-  /** Messages interrupt by default; callers can explicitly queue or reject busy recipients. */
+  /** Agent messages steer by default; human messages interrupt. Explicit delivery modes take precedence. */
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: SendAgentMessageRequest["attachments"];
@@ -3581,7 +3581,8 @@ export class DaemonClient {
     text: string,
     options?: SendMessageOptions,
   ): Promise<SendAgentMessageResponseMessage["payload"]> {
-    const activeTurnBehavior = options?.activeTurnBehavior ?? "interrupt";
+    const activeTurnBehavior =
+      options?.activeTurnBehavior ?? (options?.sourceAgentId ? "steer" : "interrupt");
     this.requireMessageCapabilities({ ...options, activeTurnBehavior });
     const requestId = this.createRequestId();
     const messageId = options?.messageId ?? crypto.randomUUID();

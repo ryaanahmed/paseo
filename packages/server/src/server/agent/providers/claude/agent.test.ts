@@ -25,6 +25,7 @@ import type {
 } from "../../agent-sdk-types.js";
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
 import { buildAgentPrompt, renderPromptAttachmentAsText } from "../../prompt-attachments.js";
+import { formatAgentMessage, prepareAgentMessage } from "../../agent-messages/index.js";
 
 interface TestClaudeSession {
   translateMessageToEvents(message: SDKMessage): AgentStreamEvent[];
@@ -179,6 +180,69 @@ describe("convertClaudeHistoryEntry", () => {
         },
       ]);
     }
+  });
+
+  test("preserves assistant tool blocks beside quoted peer-envelope text", () => {
+    const text = formatAgentMessage({
+      id: "peer-message",
+      source: { kind: "agent-message", agentId: "sender" },
+      text: "Continue the task",
+    });
+    const content = [
+      { type: "text", text },
+      { type: "tool_use", id: "bash-call", name: "Bash", input: { command: "true" } },
+    ];
+    let mapped: unknown;
+    convertClaudeHistoryEntry(
+      { type: "assistant", message: { role: "assistant", content } },
+      (blocks) => {
+        mapped = blocks;
+        return [];
+      },
+    );
+    expect(mapped).toEqual(content);
+  });
+
+  test("retains tool results beside synthetic peer content", () => {
+    const text = formatAgentMessage({
+      id: "peer-message",
+      source: { kind: "agent-message", agentId: "sender" },
+      text: "Continue the task",
+    });
+    const result = { type: "tool_result", tool_use_id: "bash-call", content: "done" };
+    const content = [
+      { type: "text", text: `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n${text}` },
+      result,
+    ];
+    let mapped: unknown;
+    convertClaudeHistoryEntry(
+      { type: "user", isMeta: true, message: { role: "user", content } },
+      (blocks) => {
+        mapped = blocks;
+        return [];
+      },
+    );
+    expect(mapped).toEqual([{ type: "text", text }, result]);
+  });
+
+  test("replays synthetic peer input without Claude's non-user prefix", () => {
+    const peer = prepareAgentMessage(
+      "Continue the task",
+      { kind: "agent-message", agentId: "sender" },
+      "peer-message",
+    );
+    const entry = {
+      type: "user",
+      uuid: "sdk-message",
+      isMeta: true,
+      message: {
+        role: "user",
+        content: `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n${peer.prompt}`,
+      },
+    };
+    expect(convertClaudeHistoryEntry(entry, () => [])).toEqual([
+      { type: "user_message", text: peer.prompt, messageId: "sdk-message" },
+    ]);
   });
 
   test("skips synthetic user entries", () => {
@@ -967,6 +1031,24 @@ describe("ClaudeAgentSession features", () => {
       await session.close();
     }
   }
+
+  test("marks peer input as synthetic with its agent origin while preserving human input", async () => {
+    const peer = prepareAgentMessage(
+      "Continue the task",
+      { kind: "agent-message", agentId: "sender", title: "Peer worker" },
+      "peer-message",
+    );
+    const delivered = await captureSdkUserMessage(peer.prompt);
+    expect(delivered.isSynthetic).toBe(true);
+    expect(delivered.origin).toEqual({ kind: "peer", from: "sender", name: "Peer worker" });
+    const human = await captureSdkUserMessage("Continue the task");
+    expect(human.isSynthetic).toBeUndefined();
+    expect(human.origin).toBeUndefined();
+    const pasted = prepareAgentMessage(String(peer.prompt), undefined, "human-message");
+    const quoted = await captureSdkUserMessage(pasted.prompt);
+    expect(quoted.isSynthetic).toBeUndefined();
+    expect(quoted.origin).toBeUndefined();
+  });
 
   const issueAttachment: AgentAttachment = {
     type: "forge_issue",

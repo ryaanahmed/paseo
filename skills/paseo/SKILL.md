@@ -63,7 +63,7 @@ Detach is an explicit user action in the subagents track, not an agent tool. A c
 
 Agent-scoped `create_agent` defaults `notifyOnFinish` to true. Set it to `false` only for truly fire-and-forget agents.
 
-**`send_agent_prompt`** — `{ agentId, prompt }`. Use for follow-ups to an existing agent. Interrupts the active turn by default and returns after acceptance. Set `interrupt: false` to queue until the recipient has no active turn or pending permission. Agent-scoped calls default `notifyOnFinish` to true; top-level calls have no parent callback.
+**`send_agent_prompt`** — `{ agentId, prompt }`. Use for follow-ups to an existing agent. Agent-scoped sends steer the active turn by default and return after acceptance; top-level human sends interrupt. Set `interrupt: true` to interrupt explicitly or `interrupt: false` to queue until the recipient has no active turn or pending permission. Agent-scoped calls default `notifyOnFinish` to true; top-level calls have no parent callback.
 
 **`update_agent`** — `{ agentId, name?, labels?, settings? }`. Use `settings` for runtime changes on an existing agent: `modeId`, `model`, `thinkingOptionId`, and provider-specific `features`. For Codex fast mode, pass `settings: { features: { "fast_mode": true } }`.
 
@@ -130,7 +130,7 @@ paseo schedule create --cron "*/15 * * * *" "ping main build"
 paseo heartbeat create --cron "*/15 * * * *" "check the build"
 ```
 
-`paseo send` interrupts by default. Use `--queue` to defer delivery until the recipient is available. `--no-wait` returns after acceptance; queued `--wait` observes that message’s exact execution. Completion notifications also interrupt active work. Preserve message IDs after connection failures and inspect their exact execution before retrying.
+`paseo send` steers by default when `PASEO_AGENT_ID` identifies the sender; human sends interrupt by default. Use `--steer`, `--interrupt`, or `--queue` to select delivery explicitly. `--no-wait` returns after acceptance; queued `--wait` observes that message’s exact execution. Completion notifications steer active work. An unavailable steer falls back to interruption; accepted steers are never replayed on a timer. Preserve message IDs after connection failures and inspect their exact execution before retrying.
 
 Discover with `paseo --help` and `paseo <cmd> --help`.
 

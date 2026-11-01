@@ -94,7 +94,7 @@ import {
   type PendingForegroundRun,
 } from "./agent-run-state.js";
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
-import { projectAgentMessage } from "./agent-messages/index.js";
+import { addAgentMessageInterruptionNotice, projectAgentMessage } from "./agent-messages/index.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import { stripInternalPaseoMcpServer, withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
 import { resolveCreateAgentTitles } from "./create-agent-title.js";
@@ -960,7 +960,6 @@ export class AgentManager {
             error: error instanceof Error ? error.message : String(error),
           }),
         ].join("\n\n"),
-        activeTurnBehavior: "interrupt",
         unarchive: false,
         logger: this.logger,
       });
@@ -3238,8 +3237,12 @@ export class AgentManager {
     this.emitState(agent);
 
     try {
+      const replacementPrompt = addAgentMessageInterruptionNotice(
+        prompt,
+        this.getTimeline(agentId),
+      );
       await this.cancelAgentRunBefore(agentId, "replace");
-      return this.streamAgent(agentId, prompt, options);
+      return this.streamAgent(agentId, replacementPrompt, options);
     } catch (error) {
       const latest = this.agents.get(agentId);
       if (latest) {
@@ -3384,8 +3387,12 @@ export class AgentManager {
     this.emitState(agent);
 
     try {
+      const replacementPrompt = addAgentMessageInterruptionNotice(
+        prompt,
+        this.getTimeline(agent.id),
+      );
       await this.cancelAgentRunBefore(agent.id, "replace");
-      return this.streamAgent(agent.id, prompt, options);
+      return this.streamAgent(agent.id, replacementPrompt, options);
     } catch (error) {
       const latest = this.agents.get(agent.id);
       if (latest) {

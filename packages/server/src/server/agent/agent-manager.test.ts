@@ -1,5 +1,6 @@
 import {
   prepareAgentMessage,
+  parseAgentMessage,
   formatAgentMessage,
   formatSystemNotificationPrompt,
 } from "./agent-messages/index.js";
@@ -890,6 +891,7 @@ test("unavailable steer interrupts once and starts one replacement turn", async 
   try {
     expect(session.interruptCount).toBe(1);
     expect(session.startCount).toBe(2);
+    expect(session.startPrompts).toEqual(["initial", "replacement"]);
     expect(manager.getTimeline(agentId)).toContainEqual(
       expect.objectContaining({ type: "user_message", clientMessageId: "replacement-client" }),
     );
@@ -898,6 +900,66 @@ test("unavailable steer interrupts once and starts one replacement turn", async 
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+test.each(["steer", "interrupt"] as const)(
+  "%s peer replacement reports in-flight tools before cancellation",
+  async (behavior) => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-peer-interruption-"));
+    const session = new SteeringTestSession({ provider: "codex", cwd: workdir });
+    session.steerResult = "unavailable";
+    const client = new (class extends TestAgentClient {
+      override async createSession(): Promise<AgentSession> {
+        return session;
+      }
+    })();
+    const manager = new AgentManager({ clients: { codex: client }, logger });
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    try {
+      const run = manager.streamAgent(agent.id, "initial");
+      void (async () => {
+        for await (const _event of run) {
+        }
+      })();
+      await manager.waitForAgentRunStart(agent.id);
+      await manager.appendTimelineItem(agent.id, {
+        type: "tool_call",
+        name: "Bash",
+        callId: "shell-write-1",
+        status: "running",
+        error: null,
+        detail: { type: "plain_text", text: "write result" },
+      });
+      const message = {
+        id: "peer-replacement",
+        source: { kind: "agent-message" as const, agentId: "sender" },
+        text: "Continue after reviewing this.",
+      };
+      await startAgentRun(manager, agent.id, formatAgentMessage(message), logger, {
+        activeTurnBehavior: behavior,
+        replaceRunning: true,
+        runOptions: { clientMessageId: message.id },
+      });
+      await manager.waitForAgentRunStart(agent.id);
+      expect(session.interruptCount).toBe(1);
+      expect(session.startPrompts).toHaveLength(2);
+      expect(session.startPrompts[1]).toContain("Bash (shell-write-1)");
+      expect(session.startPrompts[1]).toContain("automated message delivery, not from the user");
+      expect(parseAgentMessage(session.startPrompts[1] as string)).toEqual(message);
+      expect(manager.getTimeline(agent.id)).toContainEqual(
+        expect.objectContaining({
+          type: "tool_call",
+          callId: "paseo-agent-message:peer-replacement",
+          agentMessage: { event: "message", sender: { id: "sender" }, text: message.text },
+        }),
+      );
+    } finally {
+      await manager.closeAgent(agent.id);
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("orders an accepted steer before output emitted while acknowledgement is pending", async () => {
   const entered = deferred<void>();

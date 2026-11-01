@@ -7516,7 +7516,7 @@ test.each([false, true])(
       messageId: "delivery",
     });
     expect(request.sourceAgentId).toBe(supported ? "server::sender" : undefined);
-    expect(request.activeTurnBehavior).toBe("interrupt");
+    expect(request.activeTurnBehavior).toBe(supported ? "steer" : "interrupt");
     transport.triggerMessage(
       wrapSessionMessage({
         type: "send_agent_message_response",
@@ -7532,7 +7532,7 @@ test.each([false, true])(
   },
 );
 
-test("explicit queueing refuses old hosts while default agent interruption still works", async () => {
+test("explicit queueing refuses old hosts while default agent steering still works", async () => {
   const transport = createMockTransport();
   const client = new DaemonClient({
     url: "ws://test",
@@ -7558,11 +7558,11 @@ test("explicit queueing refuses old hosts while default agent interruption still
     client.sendAgentMessage("recipient", "queued", { activeTurnBehavior: "queue" }),
   ).rejects.toBeInstanceOf(AgentMessageRejectedError);
 
-  const sent = client.sendAgentMessage("recipient", "interrupt", {
+  const sent = client.sendAgentMessage("recipient", "steer", {
     sourceAgentId: "sender",
   });
   const request = parseSentFrame(transport.sent[0]);
-  expect(request.activeTurnBehavior).toBe("interrupt");
+  expect(request.activeTurnBehavior).toBe("steer");
   transport.triggerMessage(
     wrapSessionMessage({
       type: "send_agent_message_response",
@@ -7571,6 +7571,47 @@ test("explicit queueing refuses old hosts while default agent interruption still
   );
   await sent;
 });
+
+test.each(["interrupt", "steer", "queue", "reject"] as const)(
+  "agent-source SDK sends preserve explicit %s delivery",
+  async (activeTurnBehavior) => {
+    const transport = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "explicit-delivery",
+      transportFactory: () => transport.transport,
+      reconnect: { enabled: false },
+    });
+    clients.push(client);
+    const connecting = client.connect();
+    transport.triggerOpen({
+      features: {
+        agentMessageProvenance: true,
+        agentMessageQueue: true,
+        agentExecutionOutcomes: true,
+      },
+    });
+    await connecting;
+    const sent = client.sendAgentMessage("recipient", "update", {
+      sourceAgentId: "sender",
+      activeTurnBehavior,
+    });
+    const request = parseSentFrame(transport.sent[0]);
+    transport.triggerMessage(
+      wrapSessionMessage({
+        type: "send_agent_message_response",
+        payload: {
+          requestId: request.requestId,
+          agentId: "recipient",
+          accepted: true,
+          error: null,
+        },
+      }),
+    );
+    await sent;
+    expect(request).toMatchObject({ sourceAgentId: "sender", activeTurnBehavior });
+  },
+);
 
 test("queue acknowledgement remains distinguishable from execution completion", async () => {
   const transport = createMockTransport();

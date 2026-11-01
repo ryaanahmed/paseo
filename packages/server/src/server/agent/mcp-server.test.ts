@@ -24,6 +24,8 @@ import type {
   AgentRunResult,
   AgentSession,
   AgentStreamEvent,
+  SteerActiveTurnOptions,
+  SteerResult,
   ProviderSnapshotEntry,
 } from "./agent-sdk-types.js";
 import type { ProviderSnapshotManager } from "./provider-snapshot-manager.js";
@@ -242,6 +244,7 @@ function buildAgentManagerSpies() {
     appendTimelineItem: vi.fn().mockResolvedValue(undefined),
     emitLiveTimelineItem: vi.fn().mockResolvedValue(undefined),
     hasInFlightRun: vi.fn().mockReturnValue(false),
+    steerOrReplaceActiveTurn: async () => ({ status: "inactive" as const }),
     tryRunOutOfBand: vi.fn().mockReturnValue(false),
     subscribe: vi.fn().mockReturnValue(() => {}),
     enqueueAgentMessage: vi.fn().mockResolvedValue({ disposition: "queued" }),
@@ -3785,6 +3788,7 @@ class HeldTurnAgentSession implements AgentSession {
   readonly capabilities = HELD_TURN_CAPABILITIES;
   readonly id = randomUUID();
   readonly prompts: string[] = [];
+  readonly steeredPrompts: string[] = [];
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private activeTurnId: string | null = null;
   private turnStartGate: Promise<void> | null = null;
@@ -3845,6 +3849,15 @@ class HeldTurnAgentSession implements AgentSession {
       }
     }, 0);
     return { turnId };
+  }
+
+  async steerActiveTurn(
+    prompt: AgentPromptInput,
+    options: SteerActiveTurnOptions,
+  ): Promise<SteerResult> {
+    if (this.activeTurnId !== options.expectedTurnId) return { status: "unavailable" };
+    this.steeredPrompts.push(typeof prompt === "string" ? prompt : JSON.stringify(prompt));
+    return { status: "accepted" };
   }
 
   finishTurn(finalText?: string): void {
@@ -3957,6 +3970,68 @@ class HeldTurnAgentClient implements AgentClient {
 describe("send_agent_prompt MCP tool", () => {
   const logger = createTestLogger();
   const existingCwd = process.cwd();
+
+  it.each([
+    { caller: true, interrupt: undefined, disposition: "steered", starts: 1, steers: 1 },
+    { caller: false, interrupt: undefined, disposition: "turn_started", starts: 2, steers: 0 },
+    { caller: true, interrupt: true, disposition: "turn_started", starts: 2, steers: 0 },
+    { caller: true, interrupt: false, disposition: "queued", starts: 1, steers: 0 },
+  ])(
+    "delivers caller=$caller interrupt=$interrupt as $disposition through MCP",
+    async ({ caller, interrupt, disposition, starts, steers }) => {
+      const workdir = await mkdtemp(join(tmpdir(), "mcp-delivery-default-"));
+      const storage = new AgentStorage(join(workdir, "agents"), logger);
+      const provider = new HeldTurnAgentClient("codex", true);
+      const agentManager = new AgentManager({
+        clients: { codex: provider },
+        registry: storage,
+        messageQueueDirectory: join(workdir, "message-queue"),
+        executionStore: new AgentExecutionStore(join(workdir, "executions")),
+        logger,
+      });
+      let client: Client | undefined;
+      try {
+        const recipient = await agentManager.createAgent(
+          { provider: "codex", cwd: existingCwd },
+          undefined,
+          { workspaceId: "wks_delivery" },
+        );
+        const server = await createAgentMcpServer({
+          agentManager,
+          agentStorage: storage,
+          callerAgentId: caller ? "sender" : undefined,
+          providerSnapshotManager: createOpenCodeManager().manager,
+          logger,
+        });
+        client = await connectInMemoryMcpClient(server);
+        await client.callTool({
+          name: "send_agent_prompt",
+          arguments: {
+            agentId: recipient.id,
+            prompt: "Keep working",
+            interrupt: true,
+            notifyOnFinish: false,
+          },
+        });
+        const response = await client.callTool({
+          name: "send_agent_prompt",
+          arguments: {
+            agentId: recipient.id,
+            prompt: "Coordination update",
+            interrupt,
+            notifyOnFinish: false,
+          },
+        });
+        expect(response.isError).not.toBe(true);
+        expect(response.structuredContent).toMatchObject({ success: true, disposition });
+        expect(provider.sessions[0]!.prompts).toHaveLength(starts);
+        expect(provider.sessions[0]!.steeredPrompts).toHaveLength(steers);
+      } finally {
+        await client?.close();
+        await removeAgentStateDir(agentManager, storage, workdir);
+      }
+    },
+  );
 
   it("defaults agent-scoped prompts to background finish notifications", async () => {
     const { agentManager, agentStorage, spies } = createTestDeps();
@@ -4335,7 +4410,7 @@ describe("send_agent_prompt MCP tool", () => {
       await removeAgentStateDir(agentManager, storage, workdir);
     }
   });
-  it("interrupts a running child by default and observes only the replacement completion", async () => {
+  it("explicitly interrupts a running child and observes only the replacement completion", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-interrupt-running-child-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
     const parentClient = new HeldTurnAgentClient("claude", false);
@@ -4376,6 +4451,7 @@ describe("send_agent_prompt MCP tool", () => {
       const sent = await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
         agentId: childId,
         prompt: "Handle this message now",
+        interrupt: true,
       });
       expect(sent.structuredContent).toMatchObject({
         success: true,
@@ -4480,7 +4556,7 @@ describe("send_agent_prompt MCP tool", () => {
     }
   });
 
-  it("interrupts the caller with one exact queued-startup failure notification", async () => {
+  it("steers the caller with one exact queued-startup failure notification", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-queued-start-failure-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
     const parentClient = new HeldTurnAgentClient("claude", true);
@@ -4526,12 +4602,11 @@ describe("send_agent_prompt MCP tool", () => {
       );
       expect(response.structuredContent).toMatchObject({ success: true, disposition: "queued" });
       await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("error"));
-      await vi.waitFor(() => expect(parentClient.sessions[0]!.prompts).toHaveLength(2), {
+      await vi.waitFor(() => expect(parentClient.sessions[0]!.steeredPrompts).toHaveLength(1), {
         timeout: 3000,
       });
-      await parentRun;
       expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("running");
-      const notification = parseAgentMessage(parentClient.sessions[0]!.prompts[1])!;
+      const notification = parseAgentMessage(parentClient.sessions[0]!.steeredPrompts[0])!;
       expect(notification.source).toMatchObject({
         kind: "agent-notification",
         agentId: child.id,
@@ -4552,9 +4627,11 @@ describe("send_agent_prompt MCP tool", () => {
       });
       expect(execution?.executionId).toBe(evidence.executionId);
       expect(execution?.turnId).toBeNull();
+      expect(parentClient.sessions[0]!.prompts).toEqual(["Keep working"]);
       parentClient.sessions[0]!.finishTurn();
+      await parentRun;
       await agentManager.flush();
-      expect(parentClient.sessions[0]!.prompts).toHaveLength(2);
+      expect(parentClient.sessions[0]!.steeredPrompts).toHaveLength(1);
       expect(childClient.sessions[0]!.prompts).toHaveLength(1);
     } finally {
       await removeAgentStateDir(agentManager, storage, workdir);
