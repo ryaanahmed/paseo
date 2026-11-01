@@ -894,6 +894,7 @@ export class Session {
       },
       downloadTokenStore,
       paseoHome,
+      autoRefresh: workspaceGitService.autoRefresh,
       logger: this.sessionLogger,
     });
     this.agentManager = agentManager;
@@ -5756,7 +5757,11 @@ export class Session {
     projectRecord?: PersistedProjectRecord | null;
     includeGitData: boolean;
   }): Promise<WorkspaceDescriptorPayload> {
-    if (input.includeGitData && input.workspace.kind !== "directory") {
+    if (
+      this.workspaceGitService.autoRefresh !== false &&
+      input.includeGitData &&
+      input.workspace.kind !== "directory"
+    ) {
       return this.describeWorkspaceRecordWithGitData(input.workspace, input.projectRecord);
     }
     return this.describeWorkspaceRecord(input.workspace, input.projectRecord);
@@ -6692,6 +6697,7 @@ export class Session {
   }
 
   private async reconcileWorkspaceGitObservers(): Promise<void> {
+    if (this.workspaceGitService.autoRefresh === false) return;
     const all = this.wantsEvent("checkout_status_update")
       ? await this.workspaceDirectory.listObservationTargets()
       : [];

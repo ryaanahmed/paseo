@@ -324,6 +324,43 @@ function createService(options?: CreateServiceTestOptions) {
 }
 
 describe("WorkspaceGitServiceImpl", () => {
+  test("manual refresh keeps repository subscriptions passive and explicit reads current", async () => {
+    const deps = buildDefaultTestServiceDeps();
+    const service = new WorkspaceGitServiceImpl({
+      logger: createLogger() as unknown as pino.Logger,
+      paseoHome: "/tmp/paseo-test",
+      autoRefresh: false,
+      deps,
+    });
+    const listener = vi.fn();
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, listener);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(deps.getCheckoutStatus).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    const watch = await service.requestWorkingTreeWatch(REPO_CWD, vi.fn());
+    expect(watch.repoRoot).toBe(REPO_CWD);
+    const initial = await service.getSnapshot(REPO_CWD, {
+      force: true,
+      includeForge: false,
+      reason: "manual",
+    });
+    expect(initial.git.currentBranch).toBe("main");
+    deps.getCheckoutStatus.mockResolvedValue(
+      createCheckoutStatus(REPO_CWD, { currentBranch: "changed" }),
+    );
+    const refreshed = await service.getSnapshot(REPO_CWD, {
+      force: true,
+      includeForge: false,
+      reason: "manual",
+    });
+    expect(refreshed.git.currentBranch).toBe("changed");
+    expect(service.getMetrics().fileObserver.nativeHandleCount).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    watch.unsubscribe();
+    subscription.unsubscribe();
+    await service.dispose();
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
   });

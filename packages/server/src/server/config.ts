@@ -618,6 +618,7 @@ export function resolveConfigFromPersisted(
     mcpInjectIntoAgents,
     browserToolsEnabled,
     git: resolveGitProcessConfig(env, persisted),
+    repositoryAutoRefresh: persisted.daemon?.repositoryAutoRefresh ?? true,
     autoArchiveAfterMerge,
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
     appendSystemPrompt,

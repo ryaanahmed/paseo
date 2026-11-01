@@ -24,80 +24,83 @@ function extractAssistantText(queue: SessionOutboundMessage[], agentId: string):
   return parts.join("");
 }
 
-describe("daemon E2E - streaming", () => {
-  let ctx: DaemonTestContext;
-  let messages: SessionOutboundMessage[] = [];
-  let unsubscribe: (() => void) | null = null;
+describe.each([true, false])(
+  "daemon E2E - streaming (repositoryAutoRefresh=%s)",
+  (repositoryAutoRefresh) => {
+    let ctx: DaemonTestContext;
+    let messages: SessionOutboundMessage[] = [];
+    let unsubscribe: (() => void) | null = null;
 
-  beforeEach(async () => {
-    ctx = await createDaemonTestContext();
-    messages = [];
-    unsubscribe = ctx.client.subscribeRawMessages((message) => {
-      messages.push(message);
+    beforeEach(async () => {
+      ctx = await createDaemonTestContext({ repositoryAutoRefresh });
+      messages = [];
+      unsubscribe = ctx.client.subscribeRawMessages((message) => {
+        messages.push(message);
+      });
     });
-  });
 
-  afterEach(async () => {
-    unsubscribe?.();
-    await ctx.cleanup();
-  }, 30_000);
+    afterEach(async () => {
+      unsubscribe?.();
+      await ctx.cleanup();
+    }, 30_000);
 
-  test("streams assistant_message chunks that concatenate correctly", async () => {
-    const cwd = tmpCwd();
-    try {
-      const agent = await ctx.client.createAgent({
-        provider: "claude",
-        cwd,
-        title: "Streaming concat test",
-        modeId: "bypassPermissions",
-      });
-      await ctx.client.subscribeAgentTimeline(agent.id, () => {}).ready;
+    test("streams assistant_message chunks that concatenate correctly", async () => {
+      const cwd = tmpCwd();
+      try {
+        const agent = await ctx.client.createAgent({
+          provider: "claude",
+          cwd,
+          title: "Streaming concat test",
+          modeId: "bypassPermissions",
+        });
+        await ctx.client.subscribeAgentTimeline(agent.id, () => {}).ready;
 
-      messages.length = 0;
-      await ctx.client.sendMessage(
-        agent.id,
-        "Please complete this sentence with exactly one more sentence: 'The quick brown fox jumps over the lazy dog.'",
-      );
-      const finalState = await ctx.client.waitForFinish(agent.id, 5_000);
-      expect(finalState.status).toBe("idle");
+        messages.length = 0;
+        await ctx.client.sendMessage(
+          agent.id,
+          "Please complete this sentence with exactly one more sentence: 'The quick brown fox jumps over the lazy dog.'",
+        );
+        const finalState = await ctx.client.waitForFinish(agent.id, 5_000);
+        expect(finalState.status).toBe("idle");
 
-      const assistantText = extractAssistantText(messages, agent.id);
-      expect(assistantText).toBe(
-        "The quick brown fox jumps over the lazy dog. Then the fox ran away.",
-      );
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  }, 30_000);
+        const assistantText = extractAssistantText(messages, agent.id);
+        expect(assistantText).toBe(
+          "The quick brown fox jumps over the lazy dog. Then the fox ran away.",
+        );
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    }, 30_000);
 
-  test("sending a new message while a run is active does not mix streams", async () => {
-    const cwd = tmpCwd();
-    try {
-      const agent = await ctx.client.createAgent({
-        provider: "codex",
-        cwd,
-        title: "Overlap stream test",
-        modeId: "full-access",
-      });
-      await ctx.client.subscribeAgentTimeline(agent.id, () => {}).ready;
+    test("sending a new message while a run is active does not mix streams", async () => {
+      const cwd = tmpCwd();
+      try {
+        const agent = await ctx.client.createAgent({
+          provider: "codex",
+          cwd,
+          title: "Overlap stream test",
+          modeId: "full-access",
+        });
+        await ctx.client.subscribeAgentTimeline(agent.id, () => {}).ready;
 
-      messages.length = 0;
-      await ctx.client.sendMessage(agent.id, "Run: sleep 30");
+        messages.length = 0;
+        await ctx.client.sendMessage(agent.id, "Run: sleep 30");
 
-      await ctx.client.waitForAgentUpsert(
-        agent.id,
-        (snapshot) => snapshot.status === "running",
-        5_000,
-      );
+        await ctx.client.waitForAgentUpsert(
+          agent.id,
+          (snapshot) => snapshot.status === "running",
+          5_000,
+        );
 
-      await ctx.client.sendMessage(agent.id, "Say 'state saved' and nothing else");
-      const finalState = await ctx.client.waitForFinish(agent.id, 5_000);
-      expect(finalState.status).toBe("idle");
+        await ctx.client.sendMessage(agent.id, "Say 'state saved' and nothing else");
+        const finalState = await ctx.client.waitForFinish(agent.id, 5_000);
+        expect(finalState.status).toBe("idle");
 
-      const assistantText = extractAssistantText(messages, agent.id).toLowerCase();
-      expect(assistantText).toContain("state saved");
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  }, 30_000);
-});
+        const assistantText = extractAssistantText(messages, agent.id).toLowerCase();
+        expect(assistantText).toContain("state saved");
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    }, 30_000);
+  },
+);

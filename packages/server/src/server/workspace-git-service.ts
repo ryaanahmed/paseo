@@ -203,6 +203,7 @@ export interface WorkspaceGitRuntimeSnapshot {
 }
 
 export interface WorkspaceGitService {
+  readonly autoRefresh?: boolean;
   registerWorkspace(
     params: { cwd: string },
     listener: WorkspaceGitListener,
@@ -394,6 +395,7 @@ interface WorkspaceGitServiceDependencies {
 }
 
 interface WorkspaceGitServiceOptions {
+  autoRefresh?: boolean;
   logger: pino.Logger;
   paseoHome: string;
   worktreesRoot?: string;
@@ -634,8 +636,10 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     WorkspaceGitAuxiliaryReadCacheEntry<string>
   >({ max: WORKSPACE_GIT_AUXILIARY_CACHE_MAX });
   private readonly checkoutDiffCache = new CheckoutDiffCache(() => this.deps.now().getTime());
+  readonly autoRefresh: boolean;
   private watcherErrorCallbackCount = 0;
   constructor(options: WorkspaceGitServiceOptions) {
+    this.autoRefresh = options.autoRefresh ?? true;
     this.logger = options.logger.child({ module: "workspace-git-service" });
     this.paseoHome = options.paseoHome;
     this.worktreesRoot = options.worktreesRoot;
@@ -662,7 +666,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     const cwd = resolve(params.cwd);
     const target = this.ensureWorkspaceTarget(cwd);
     target.listeners.add(listener);
-    if (target.listeners.size === 1) {
+    if (this.autoRefresh && target.listeners.size === 1) {
       this.startWorkspaceSubscriptionTimers(target);
     }
     if (!target.latestSnapshot) {
@@ -749,6 +753,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     this.assertNotDisposed();
     cwd = resolve(cwd);
     const request = this.normalizeRefreshRequest(options, "getSnapshot", true);
+    if (!this.autoRefresh) request.force = true;
     const target = this.ensureWorkspaceTarget(cwd);
     if (!request.force && target.latestSnapshot) {
       return target.latestSnapshot;
@@ -802,10 +807,13 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     // starting a cold diff, rather than invalidating that build halfway through.
     await this.workspaceTargets.get(normalizedCwd)?.observationSetupPromise;
     this.assertNotDisposed();
+    const refreshOptions: WorkspaceGitReadOptions | undefined = this.autoRefresh
+      ? readOptions
+      : { force: true, reason: "manual-read" };
     return this.checkoutDiffCache.read({
       cwd: normalizedCwd,
       compare: normalizedOptions,
-      ...readOptions,
+      ...refreshOptions,
       load: () =>
         this.deps.getCheckoutDiff(normalizedCwd, normalizedOptions, {
           paseoHome: this.paseoHome,
@@ -978,6 +986,10 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   ): Promise<{ repoRoot: string | null; unsubscribe: () => void }> {
     this.assertNotDisposed();
     cwd = resolve(cwd);
+    // Explicit readers still need the repository root, but no observation lease.
+    if (!this.autoRefresh) {
+      return { repoRoot: await this.resolveCheckoutWatchRoot(cwd), unsubscribe: () => {} };
+    }
     const target = await this.ensureWorkingTreeWatchTarget(cwd);
     target.listeners.add(onChange);
 
@@ -991,6 +1003,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
 
   scheduleRefreshForCwd(cwd: string): void {
     this.assertNotDisposed();
+    if (!this.autoRefresh) return;
     cwd = resolve(cwd);
     const target = this.workspaceTargets.get(cwd);
     if (target) {
@@ -1000,6 +1013,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
 
   onWorkspaceStateMayHaveChanged(cwd: string): void {
     this.assertNotDisposed();
+    if (!this.autoRefresh) return;
     const normalizedCwd = resolve(cwd);
     const target = this.workspaceTargets.get(normalizedCwd);
     if (!target || target.closed) {
@@ -1338,6 +1352,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
 
   private isActiveObservedWorkspaceTarget(target: WorkspaceGitTarget): boolean {
     return (
+      this.autoRefresh &&
       !target.closed &&
       target.listeners.size > 0 &&
       this.workspaceTargets.get(target.cwd) === target
@@ -2764,7 +2779,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   }
 
   private updateForgePrStatusPollForTarget(target: WorkspaceGitTarget): void {
-    if (target.listeners.size === 0) {
+    if (!this.autoRefresh || target.listeners.size === 0) {
       this.stopForgePrStatusPollForTarget(target);
       return;
     }

@@ -163,3 +163,23 @@ test("keeps the socket usable after rejecting an oversized structured diff", asy
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 120000);
+
+test("manual repository refresh preserves diff and file reads without observation", async () => {
+  await ctx.cleanup();
+  ctx = await createDaemonTestContext({ repositoryAutoRefresh: false });
+  const cwd = tmpCwd();
+  try {
+    initGitRepo(cwd);
+    commitFile(cwd, "base.txt", "before\n");
+    const subscription = ctx.client.observeCheckoutDiff(cwd, { mode: "uncommitted" });
+    expect((await subscription.ready).files).toEqual([]);
+    writeFileSync(path.join(cwd, "base.txt"), "after\n");
+    const refreshed = await ctx.client.getCheckoutDiff(cwd, { mode: "uncommitted" });
+    expect(refreshed.files.map((file) => file.path)).toEqual(["base.txt"]);
+    const file = await ctx.client.readFile(cwd, "base.txt");
+    expect(new TextDecoder().decode(file.bytes)).toBe("after\n");
+    await subscription.release();
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 60000);

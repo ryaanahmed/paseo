@@ -263,6 +263,7 @@ export const PersistedConfigSchema = z
           })
           .strict()
           .optional(),
+        repositoryAutoRefresh: z.boolean().optional(),
         autoArchiveAfterMerge: z.boolean().optional(),
         enableTerminalAgentHooks: z.boolean().optional(),
         appendSystemPrompt: z.string().optional(),

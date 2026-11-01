@@ -40,6 +40,7 @@ function makeDir(prefix: string): string {
 
 function makeSubsystem(
   options: {
+    autoRefresh?: boolean;
     hasBinaryChannel?: boolean;
     emitBinary?: (frame: Uint8Array) => Promise<void> | void;
   } = {},
@@ -57,6 +58,7 @@ function makeSubsystem(
   };
   const paseoHome = makeDir("workspace-files-home-");
   const subsystem = new WorkspaceFilesSession({
+    autoRefresh: options.autoRefresh,
     host,
     downloadTokenStore: new DownloadTokenStore({ ttlMs: 60_000 }),
     paseoHome,
@@ -82,6 +84,45 @@ function uploadFrame(args: Parameters<typeof encodeFileTransferFrame>[0]): FileT
 }
 
 describe("WorkspaceFilesSession", () => {
+  test("manual file subscriptions acknowledge and explicit reads return external edits", async () => {
+    const cwd = makeDir("workspace-files-manual-");
+    writeFileSync(join(cwd, "notes.txt"), "before");
+    const { subsystem, emitted } = makeSubsystem({ autoRefresh: false });
+    const source = {};
+    const ownership = new SessionDelivery((_source, message) => emitted.push(message));
+    ownership.attach(source, true);
+    const request = {
+      type: "fs.file.subscribe.request",
+      cwd,
+      path: "notes.txt",
+      requestId: "subscribe",
+    } as const;
+    await ownership.request(source, request, () =>
+      subsystem.handleFileSubscribeRequest(request, ownership),
+    );
+    expect(emitted[0]).toMatchObject({
+      type: "fs.file.subscribe.response",
+      payload: { requestId: "subscribe" },
+    });
+    writeFileSync(join(cwd, "notes.txt"), "after");
+    await subsystem.handleFileExplorerRequest({
+      type: "file_explorer_request",
+      cwd,
+      path: "notes.txt",
+      mode: "file",
+      requestId: "refresh",
+    });
+    expect(emitted[1]).toMatchObject({
+      type: "file_explorer_response",
+      payload: {
+        error: null,
+        file: { content: "after" },
+        requestId: "refresh",
+      },
+    });
+    await ownership.close();
+  });
+
   test("creates an entry and emits the complete success response", async () => {
     const cwd = makeDir("workspace-files-create-");
     const { subsystem, emitted } = makeSubsystem();

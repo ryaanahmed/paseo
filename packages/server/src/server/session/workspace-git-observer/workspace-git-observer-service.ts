@@ -48,7 +48,7 @@ export interface WorkspaceGitObserverService {
 }
 
 export function createWorkspaceGitObserverService(deps: {
-  workspaceGitService: Pick<WorkspaceGitService, "registerWorkspace">;
+  workspaceGitService: Pick<WorkspaceGitService, "registerWorkspace" | "autoRefresh">;
   emitWorkspaceUpdateForCwd: (cwd: string) => Promise<void>;
   emitStatusUpdate: (cwd: string, snapshot: WorkspaceGitRuntimeSnapshot) => void;
   onBranchChanged?: (
@@ -129,6 +129,7 @@ export function createWorkspaceGitObserverService(deps: {
   }
 
   function syncObserver(cwd: string, options: { isGit: boolean; workspaceId: string }): void {
+    if (workspaceGitService.autoRefresh === false) return;
     const normalizedCwd = resolve(cwd);
     const currentState = workspaceStates.get(options.workspaceId);
     if (currentState && currentState.cwd !== normalizedCwd) {

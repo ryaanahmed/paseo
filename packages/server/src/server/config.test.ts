@@ -10,6 +10,17 @@ import { loadPersistedConfig } from "./persisted-config.js";
 const roots: string[] = [];
 
 describe("server config", () => {
+  test("loads manual repository refresh without changing the default", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "paseo-manual-refresh-"));
+    roots.push(home);
+    expect(loadConfig(home, { env: {} }).repositoryAutoRefresh).toBe(true);
+    await writeFile(
+      path.join(home, "config.json"),
+      JSON.stringify({ daemon: { repositoryAutoRefresh: false } }),
+    );
+    expect(loadConfig(home, { env: {} }).repositoryAutoRefresh).toBe(false);
+  });
+
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });

@@ -1,5 +1,13 @@
 # File observation
 
+Set `daemon.repositoryAutoRefresh` to `false` in the host config and restart the
+daemon to use manual repository refresh. Existing clients still browse files,
+read diffs and refresh explicitly, but repository subscriptions do not install
+source-tree watches or poll Git/PR status. Workspace/project directory listings
+use stored metadata until an explicit read updates it. File subscriptions return
+the current version without watching for external edits. Agent output and
+completion delivery remain live. The default is `true`.
+
 Use `packages/server/src/server/file-observer` for recursive filesystem observation. Create one observer service at the owning service boundary, subscribe roots through it, and close it during owner shutdown. Keep platform watchers, directory discovery, exclusion reconciliation, event batching, failure cleanup, diagnostics, and teardown inside the module. A consumer supplies a root and excluded subtrees; it must not branch on the platform or manage child watchers.
 
 Do not replace the Linux implementation with `fs.watch({ recursive: true })`. Node 22 implements Linux recursion in JavaScript by walking the tree and watching every file and directory. Paseo's directory-only Linux watcher already exhausted resources before ignored-tree pruning and a watcher cap were added in [#794](https://github.com/getpaseo/paseo/pull/794).

@@ -82,6 +82,7 @@ export interface ReconciliationResult {
 }
 
 export interface WorkspaceReconciliationServiceOptions {
+  autoRefresh?: boolean;
   serverId?: string;
   projectRegistry: ProjectRegistry;
   workspaceRegistry: WorkspaceRegistry;
@@ -135,7 +136,10 @@ export class WorkspaceReconciliationService {
   private reconciling = false;
   private reconcileQueuedMode: "metadata" | "full" | null = null;
 
+  private readonly autoRefresh: boolean;
+
   constructor(options: WorkspaceReconciliationServiceOptions) {
+    this.autoRefresh = options.autoRefresh ?? true;
     this.serverId = options.serverId;
     this.projectRegistry = options.projectRegistry;
     this.workspaceRegistry = options.workspaceRegistry;
@@ -159,7 +163,7 @@ export class WorkspaceReconciliationService {
         try {
           // Project creation does not resolve until its root watch is installed,
           // closing the git-init race for newly added empty projects.
-          await this.syncProjectRootWatches();
+          if (this.autoRefresh) await this.syncProjectRootWatches();
           if (this.disposed) return;
           if (mutation.kind === "upsert" && mutation.project && !mutation.project.archivedAt) {
             this.onProjectUpdate?.({ kind: "upsert", project: mutation.project });
@@ -170,6 +174,7 @@ export class WorkspaceReconciliationService {
           this.logger.warn({ err: error }, "Project reconciliation mutation handling failed");
         }
       }) ?? null;
+    if (!this.autoRefresh) return;
     await this.syncProjectRootWatches();
     this.rescanTimer = this.clock.setInterval(
       () => this.reconcileObservedGitMetadata("full"),

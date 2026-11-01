@@ -176,7 +176,10 @@ class ObservedPlacements {
   private started = false;
   private checkoutReadCount = 0;
 
-  constructor(private readonly specs: ProjectSpec[]) {
+  constructor(
+    private readonly specs: ProjectSpec[],
+    options: { autoRefresh?: boolean } = {},
+  ) {
     cleanupPaths.push(this.home);
     const logger = createTestLogger();
     this.projects = new ObservedProjectRegistry(path.join(this.home, "projects.json"), logger);
@@ -192,6 +195,7 @@ class ObservedPlacements {
       return { close: () => (watch.closed = true) };
     };
     this.service = new WorkspaceReconciliationService({
+      autoRefresh: options.autoRefresh,
       projectRegistry: this.projects,
       workspaceRegistry: this.workspaces,
       workspaceGitService: { getCheckout: async (cwd) => this.readCheckout(cwd) },
@@ -399,6 +403,19 @@ class ObservedPlacements {
 }
 
 describe("observed workspace placement", () => {
+  test("manual refresh publishes registry changes without watches or periodic Git reads", async () => {
+    const observed = new ObservedPlacements([{ id: "old", root: "old" }], { autoRefresh: false });
+    await observed.start();
+    await observed.add({ id: "new", root: "new" });
+    await observed.advanceBy(120_000);
+    expect(observed.watchedRoots()).toEqual([]);
+    expect(observed.gitReads).toBe(0);
+    expect(observed.projectUpdates).toEqual([
+      { kind: "upsert", project: expect.objectContaining({ projectId: "new" }) },
+    ]);
+    observed.dispose();
+  });
+
   test("installs and publishes a new project before add resolves without Git feedback", async () => {
     const observed = new ObservedPlacements([]);
     await observed.start();

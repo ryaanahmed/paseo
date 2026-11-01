@@ -407,6 +407,7 @@ export interface PaseoDaemonConfig {
     maxProcessesPerSecond: number;
     maxProcessConcurrency: number;
   };
+  repositoryAutoRefresh?: boolean;
   autoArchiveAfterMerge?: boolean;
   enableTerminalAgentHooks?: boolean;
   appendSystemPrompt?: string;
@@ -899,6 +900,7 @@ export async function createPaseoDaemon(
   });
   const github = createGitHubService();
   const workspaceGitService = new WorkspaceGitServiceImpl({
+    autoRefresh: config.repositoryAutoRefresh,
     logger,
     paseoHome: config.paseoHome,
     worktreesRoot: config.worktreesRoot,
@@ -1002,6 +1004,7 @@ export async function createPaseoDaemon(
     releaseWorkspaceServicePortPlan(workspaceId);
   };
   const workspaceReconciliation = new WorkspaceReconciliationService({
+    autoRefresh: config.repositoryAutoRefresh,
     serverId,
     projectRegistry,
     workspaceRegistry,
@@ -1018,9 +1021,11 @@ export async function createPaseoDaemon(
     },
   });
   await workspaceReconciliation.start();
-  void workspaceReconciliation.reconcileNow().catch((error) => {
-    logger.warn({ err: error }, "Initial workspace reconciliation failed");
-  });
+  if (config.repositoryAutoRefresh !== false) {
+    void workspaceReconciliation.reconcileNow().catch((error) => {
+      logger.warn({ err: error }, "Initial workspace reconciliation failed");
+    });
+  }
   const checkoutDiffManager = new CheckoutDiffManager({
     logger,
     paseoHome: config.paseoHome,

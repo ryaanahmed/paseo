@@ -28,6 +28,7 @@ import {
   deleteExplorerEntry,
   duplicateExplorerEntry,
   getDownloadableFileInfo,
+  getExplorerFileVersion,
   listDirectoryEntries,
   readExplorerFile,
   renameExplorerEntry,
@@ -50,6 +51,7 @@ export interface WorkspaceFilesSessionHost {
 }
 
 export interface WorkspaceFilesSessionOptions {
+  autoRefresh?: boolean;
   host: WorkspaceFilesSessionHost;
   downloadTokenStore: DownloadTokenStore;
   paseoHome: string;
@@ -70,9 +72,11 @@ export class WorkspaceFilesSession {
   private readonly logger: pino.Logger;
   private readonly fileUploads: FileUploadStore;
   private readonly fileObserver: FileObserver;
+  private readonly autoRefresh: boolean;
 
   constructor(options: WorkspaceFilesSessionOptions) {
     this.host = options.host;
+    this.autoRefresh = options.autoRefresh ?? true;
     this.downloadTokenStore = options.downloadTokenStore;
     this.logger = options.logger;
     this.fileUploads = new FileUploadStore({ paseoHome: options.paseoHome });
@@ -103,6 +107,20 @@ export class WorkspaceFilesSession {
         payload: { subscriptionId: owner.responseId, version },
       });
     try {
+      // Keep the subscription acknowledgement for existing clients; refresh reads disk.
+      if (!this.autoRefresh) {
+        const initial = await getExplorerFileVersion({
+          root: request.cwd,
+          relativePath: request.path,
+        });
+        if (!owner.signal.aborted) {
+          this.host.emit({
+            type: "fs.file.subscribe.response",
+            payload: { subscriptionId: owner.responseId, initial, requestId: request.requestId },
+          });
+        }
+        return;
+      }
       bootstrap = this.fileObserver.subscribe(
         { cwd: request.cwd, path: request.path },
         (version) => {
