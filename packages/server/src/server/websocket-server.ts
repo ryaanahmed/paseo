@@ -1,4 +1,6 @@
 import { stat } from "node:fs/promises";
+import { providerAdmissionConfig } from "./agent/provider-admission.js";
+import { providerAdmissionOwner } from "./agent/provider-admission-owner.js";
 import type { CreationSnapshot } from "@getpaseo/protocol/messages";
 import { CreationService } from "./creation/index.js";
 import { MessageReceipts } from "./message-receipts/index.js";
@@ -1794,6 +1796,8 @@ export class VoiceAssistantWebSocketServer {
         agentContextPolicy: true,
         agentExecutionOutcomes: true,
         agentRuntimeRetirement: true,
+        requiredHostAdmission:
+          providerAdmissionConfig() !== null && providerAdmissionOwner.isReady(),
         agentRequestReceipts: true,
         workspaceRequestReceipts: true,
         creationLifecycle: true,

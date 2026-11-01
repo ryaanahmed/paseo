@@ -2077,3 +2077,13 @@ test("runtime retirement checks host capability before sending and preserves exa
   await expect(retiring).resolves.toEqual(result);
   await client.close();
 });
+
+test("required host admission is absent on old or disabled daemons", async () => {
+  const old = await connectClient({});
+  expect(old.client.agents.supportsRequiredHostAdmission()).toBe(false);
+  await old.client.close();
+  FakeWebSocket.instances.length = 0;
+  const { client } = await connectClient({ requiredHostAdmission: true });
+  expect(client.agents.supportsRequiredHostAdmission()).toBe(true);
+  await client.close();
+});

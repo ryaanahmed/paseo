@@ -401,6 +401,8 @@ export interface PaseoAgentHandle {
 export interface PaseoAgentActions {
   /** False until connected to a host that supports conditional idle disposal. */
   supportsRuntimeRetirement(): boolean;
+  /** True only when this daemon requires physical provider admission. */
+  supportsRequiredHostAdmission(): boolean;
   list(options: PaseoAgentListOptions & { subscribe: {} }): Promise<
     PaseoAgentListResult & {
       subscriptionId: string;
@@ -754,6 +756,8 @@ export function createPaseoApi(
     agents: {
       supportsRuntimeRetirement: () =>
         daemonClient.getLastServerInfoMessage()?.features?.agentRuntimeRetirement === true,
+      supportsRequiredHostAdmission: () =>
+        daemonClient.getLastServerInfoMessage()?.features?.requiredHostAdmission === true,
       list: listAgents,
       ref: (agent) => createAgentHandle(agent),
       create: (options) => createAgent(options),

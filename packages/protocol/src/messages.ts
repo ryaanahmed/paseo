@@ -3766,6 +3766,7 @@ export const ServerInfoStatusPayloadSchema = z
         agentContextPolicy: z.boolean().optional(),
         agentExecutionOutcomes: z.boolean().optional(),
         agentRuntimeRetirement: z.boolean().optional(),
+        requiredHostAdmission: z.boolean().optional(),
         agentMessageQueue: z.boolean().optional(),
         // COMPAT(canonicalSubmittedPrompts): added in v0.2.6, remove gate after 2027-01-30.
         canonicalSubmittedPrompts: z.boolean().optional(),

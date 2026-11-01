@@ -138,6 +138,12 @@ come from `PASEO_PROVIDER_ADMISSION_REGISTRATION`, `PASEO_PROVIDER_ADMISSION_EPO
 `PASEO_PROVIDER_ADMISSION_MANIFEST`. They belong to attended host configuration; a plugin
 cannot substitute an optional lifecycle hook for this gate.
 
+The server advertises `features.requiredHostAdmission` only while required mode
+has a live registration owner. The SDK exposes it through
+`agents.supportsRequiredHostAdmission()`. Matching orchestration plugins must
+require that capability before managed admission; provider capacity belongs to
+the daemon's physical scopes, never to a second plugin reservation by agent ID.
+
 The daemon owns the helper registration child. Missing configuration, a missing registration,
 or a dead owner closes new launches while status and physical cleanup remain available. The
 helper owns the complete process scope and releases its allowance only after that scope
@@ -149,7 +155,11 @@ OpenCode server. Existing warm turns reuse their physical runtime. Native queued
 remain durably pending while cold-runtime admission is blocked; preparation cannot submit a
 prompt. New providers must cover their utility, discovery, import, history and archive launches,
 not only session creation. Plugin providers currently lack this custody integration and are
-refused in required mode; enabling one requires additional coverage before host readiness.
+refused in required mode. Client materialization fails locally and a failed
+built-in plugin registration leaves the previous valid provider registry in
+place; this does not itself hold the host-memory barrier. Set the provider's
+`agents.providers.<id>.enabled` to `false` to exclude that client explicitly.
+Built-in plugins themselves have no per-plugin disable setting.
 
 Only an exact native execution bound to its physical runtime can enroll finishing tests.
 The owner registration binds the daemon's native execution directory. Eligibility reads that
@@ -157,6 +167,14 @@ execution's current durable status, so a failed end notification cannot keep a c
 eligible on a warm runtime. Failure to register the binding denies finishing-test eligibility
 without rewriting an already accepted execution. The host's finite finishing-test declaration
 remains a separate admission policy.
+
+`scripts/prove-joined-host-admission.mjs` accepts absolute candidate-helper,
+SA-plugin and evidence-directory paths. It uses this checkout's compiled daemon
+and SDK, an ephemeral loopback port, copied helper and standalone temporary Git
+workspace. Its local provider processes and native finishing records are fixtures;
+its injected coverage cache does not attest installed launch coverage. The proof
+exercises the production snapshot/grant checks, physical scopes, managed plugin
+admission, finite finishing slot and same-agent cold reopening.
 
 ## Provider Snapshot Refresh Contract
 
